@@ -144,11 +144,24 @@ class Action():
             for a in dou:
                 li.append(a)
         return li
-    def toTensor(self):
-        x=torch.zeros((2,2))
-        return x
-    # def sort(self):
-    #     self.one=sorted(self.one, key=cmp_to_key(self._sortCardList_cmp1))
+
+    def sort(self,env):
+        self.one.sort(key=cmp_to_key(env._sortCardList_cmp1))
+        for dou in self.double:
+            dou.sort(key=cmp_to_key(env._sortCardList_cmp1))
+    def getMinCard(self,env):#返回最小的牌
+        mincard=0
+        minOrder=INF
+        for dou in self.double:
+            for a in dou:
+                if minOrder>env.orderInd[a]:
+                    minOrder =env.orderInd[a]
+                    mincard=a
+        for a in self.one:
+            if minOrder > env.orderInd[a]:
+                minOrder = env.orderInd[a]
+                mincard = a
+        return Action([a])
 
 class Card():
     def __init__(self,id,holder=-1):#id从1开始，前
@@ -385,7 +398,10 @@ class CC():
     def useCards(self,p:Player,cards):#使用一组牌
         decInd=[0,0,0,0,0]
         for a in cards:
+            # print(a,self.lordDecor,self.lordNum)
             kind=getKind(a,self.lordDecor,self.lordNum)
+            # Card(a).print()
+            # print(p.id, kind,self.lordDecor,p.cards_decorLen[kind])
             self.__useCard(p,a,kind)
             decInd[kind]+=1
         for k in range(5):
@@ -395,7 +411,6 @@ class CC():
             for i in range(p.cards_decorLen[k]):
                 if p.cards_decorList[k][i]>0:
                     p.cards_decorList[k][j]=p.cards_decorList[k][i]
-
                     j+=1
             p.cards_decorLen[k]=j
     def _updateSortCardList(self,sortCardList:list,act:list):
@@ -543,33 +558,37 @@ class CC():
         else:
             for i in range(len(self.deck)):
                 self.deck[i]=beginDeckList[i]
-        print(self.deck.tolist())
+        # print(self.deck.tolist())
         self.deck_i = 0
         self.nowDealCardPlayer = 0
         for i in range(4):
             self.players[i].initCards()
-        haveSetLord=False#有没有人叫主
-        while(self.deck_i<CARDS_CNT-UNDERCARD_CNT):
-            haveSetLord=(self.dealCard() or haveSetLord)
-        #如果没人叫主，则从随机决定
-        if setDecor!=-1 or setDealer!=-1 or setNum>0:
+
+        if setDecor!=-1 or setDealer!=-1 or setNum>0:#认为设置，调试用
             print(setDecor, setDealer,setNum)
-            
+            self.lordNum = setNum
+            self.setLord(setDecor, setDealer)
+            haveSetLord = False  # 有没有人叫主
+            while (self.deck_i < CARDS_CNT - UNDERCARD_CNT):
+                haveSetLord = (self.dealCard() or haveSetLord)
             print("指定主牌:",decorName[setDecor]+str(setNum),"   庄家：",setDealer)
             self.lordNum=setNum
             self.setLord(setDecor, setDealer)
             self.dealer = setDealer
         else:
+            haveSetLord = False  # 有没有人叫主
+            while (self.deck_i < CARDS_CNT - UNDERCARD_CNT):
+                haveSetLord = (self.dealCard() or haveSetLord)
+            # 如果没人叫主，则从随机决定
             if not haveSetLord:
-                print("随机决定主牌")
+                # print("随机决定主牌")
                 self.setLord(random.randint(0, 3), random.randint(0, 3))  #dealer必须在==-1时，才会被改变
             if self.checkReDealCards():#满足一定条件可以重开
-                print("重新发牌")
+                # print("重新发牌")
                 self.dealCards()
                 return
-        print("庄家是玩家{:d}, 主牌:".format(self.dealer),end="")
-        # print(self.lordNum,self.lordDecor)
-        Card(self.getLord()).println()
+        # print("庄家是玩家{:d}, 主牌:".format(self.dealer),end="")
+        # Card(self.getLord()).println()
         # self.printAllCards()
         for i in range(4):#整理手牌
             p=self.players[i]
@@ -777,16 +796,25 @@ class CC():
                 kind = k
         return kind
     def _useCmpCards(self,act1:Action,act2:Action):#必须二者是同一种类别!!!
-        for i in range(len(act1.double)):#先判断2是否为对子或拖拉机
+        n=len(act1.double)
+        for i in range(n):#先判断2是否为对子
             for j in range(0,len(act1.double[i]),2):
                 if act2.double[i][j]!=act2.double[i][j+1]:
-                    return 1
-        if len(act1.double)>0:#有对子或者拖拉机，就看对应牌的大小
-            return self.orderInd[act1.double[0][0]]>=self.orderInd[act2.double[0][0]]
+                    return True
+        if n>0:#有对子或者拖拉机，就看对应牌的大小
+            for i in range(n):  # 先判断act2是否为拖拉机
+                tra1=act1.double[i]
+                tra2=act2.double[i]
+                for j in range(2, len(tra2), 2):
+                    if abs(self.orderInd[tra2[j]]- self.orderInd[tra2[j-2]])>1:#是相邻的
+                        return True
+                if self.orderInd[tra1[0]] >= self.orderInd[tra2[0]]:#只有前面的牌比后面的牌大，就返回True
+                    return True
+            return False
         for i in range(len(act1.one)):  # 最后判断单牌
             if self.orderInd[act1.one[i]] != self.orderInd[act2.one[i]]:  # 单牌且不等
                 return self.cmpCard(act1.one[i], act2.one[i])
-        return 1  # 完全想等，先出的大
+        return True  # 完全想等，先出的大
 
 
     def useCmpCards(self,act1:Action,act2:Action):#比较两组牌大小，保证两组牌一样多，且actList1为先出，actList2为后出。返回1是actList1大，否则actList2大
@@ -883,25 +911,26 @@ class CC():
                 if mina>self.orderInd[a]:
                     mina=self.orderInd[a]
                     card=a
-            decor, num = getDecorAndNum(card)
-            for pid in range(4):
-                if pid != meid:
-                    li=sortCardList4[pid]
-                    if len(li[decor][0])>0 and self.orderInd[li[decor][0][0]]>self.orderInd[card]:#寻找这个花色所有比card顺序大的牌：
-                        return True,False
+            kind, num = getKindAndNum(card,self.lordDecor,self.lordNum)
+            if card>0:
+                for pid in range(4):
+                    if pid != meid:
+                        li=sortCardList4[pid]
+                        if len(li[kind][0])>0 and self.orderInd[li[kind][0][0]]>self.orderInd[card]:#寻找这个花色所有比card顺序大的牌：
+                            return True,False
 
             for pid in range(4):
                 if pid != meid:#遍历每个人手牌的对子。
                     li = sortCardList4[pid]
                     for dou in act.double:
-                        decor, num = getDecorAndNum(dou[0])
+                        kind, num = getKindAndNum(dou[0], self.lordDecor, self.lordNum)
                         lendou=len(dou)#它是li里面拖拉机牌数的2倍，比如3344，则li里面表示为34
                         if lendou==2:
-                            a=li[decor][1]
+                            a=li[kind][1]
                             if len(a) > 0 and self.orderInd[a[0]] > self.orderInd[dou[0]]:  # 寻找这个花色所有比card顺序大的牌：
                                 return True, False
                         else:
-                            tractors = li[decor][2]
+                            tractors = li[kind][2]
                             for tra in tractors:
                                 if len(tra)*2>=lendou and self.orderInd[tra[0]] > self.orderInd[dou[0]]:
                                     return True, False
@@ -1044,8 +1073,10 @@ class CC():
         return -1
     def game_step(self,actList4,first_playerId):#输入4个人的出牌组合,保证每个人出的牌数量一样多，返回赢得那个人和所得分数
         playerId=first_playerId
+        actList4[playerId].sort(self)#
         for i in range(1,4):
             k=(first_playerId+i)%4
+            actList4[k].sort(self)#
             if self.useCmpCards(actList4[playerId],actList4[k])==0:#actList4[k]大
                 playerId=k
         #找找到最大的那个人
@@ -1146,9 +1177,9 @@ def getAllAct(self, sortCardsList, p: Player, cardsList_max, kind):  # sortCards
                     ansUp.append([a])
 # env=CC()
 # env.dealCards(None,0,5,0)#发牌测试
-# env.dfsPrintActList([9,27])
-# act1=Action([1,9,10],[[2,2]])
-# act2=Action([1,9,10],[[54,54]])
+# # env.dfsPrintActList([9,27])
+# act1=Action([],[[4,4,6,6],[10,10]])
+# act2=Action([],[[8,8,9,9],[11,11]])
 # print(env.useCmpCards(act1,act2))
 # <i:0 ♠9>
 # <i:0 ♦A>
