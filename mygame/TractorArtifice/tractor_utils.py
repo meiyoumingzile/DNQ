@@ -109,4 +109,17 @@ class Running_mean_filter:
             return (self.mean.numpy().copy(), np.sqrt(var_clip))
 
 
-
+def binary_conversion(var: int):
+    """
+    二进制单位转换
+    :param var: 需要计算的变量，bytes值
+    :return: 单位转换后的变量，kb 或 mb
+    """
+    assert isinstance(var, int)
+    if var <= 1024:
+        return f'占用 {round(var / 1024, 2)} KB内存'
+    else:
+        return f'占用 {round(var / (1024 ** 2), 2)} MB内存'
+def printSize(x):
+    memory_size = x.numel() * x.element_size()
+    binary_conversion(memory_size)

@@ -1,6 +1,8 @@
 import random
 import numpy as np
 import tractor_game
+from tractor_network import AgentNet
+from encoder import getBaseFea,getActionFeature
 from cheater import mkDeck, cheator1
 from tractor_game import Action,randomUpdateINF
 from baselinePolicy import baselineColdeck
@@ -20,7 +22,7 @@ def printCmp(a):
        return True
     else:
         return len(a)>1
-def otherUseCards(env,firstPlayerID,nextID,firstKind,sortCardList2,cards):#使用的cards只能是单牌，对子，连对
+def otherUseCards(epoch,env,firstPlayerID,nextID,firstKind,sortCardList2,cards):#使用的cards只能是单牌，对子，连对
     ans=[]
     if len(cards)==0:
         return None
@@ -37,7 +39,7 @@ def otherUseCards(env,firstPlayerID,nextID,firstKind,sortCardList2,cards):#使�
     else:
         ans = ansDown[random.randint(0, nd - 1)]
     # env.dfsPrintActList(cards)
-    env._useCardsContainINF(env.players[nextID], ans, firstKind, randomUpdateINF,sortCardList2[nextID])
+    env._useCardsContainINF(epoch,env.players[nextID], ans, firstKind, randomUpdateINF,sortCardList2[nextID])
     # env.dfsPrintActList(ans)
     return ans
 def randomPlayGame(env):#4个人双方随机游戏
@@ -52,6 +54,7 @@ def randomPlayGame(env):#4个人双方随机游戏
     sumSc=0
     isTer=False
     epoch=0
+    net = AgentNet()
     while(not isTer):#开始出牌
         # env.printAllCards()
         # print("轮次：",epoch,"  先出牌玩家：",firstPlayerID)
@@ -68,9 +71,11 @@ def randomPlayGame(env):#4个人双方随机游戏
 
             # allAct[i]=env.getMaxCards(sortCardList1[i],env.players[i])
             # env.dfsPrintActList(allAct[i])
-        allAct[firstPlayerID]=env.getAllFirstAct(sortCardList1[firstPlayerID],env.players[firstPlayerID])
-        # env.dfsPrintActList(allAct[firstPlayerID])#输出先手动作集合
-        act[firstPlayerID] = firstPlayerPolicy(allAct[firstPlayerID])#获取动作
+        firstallAction=env.getAllFirstAct(sortCardList1[firstPlayerID],env.players[firstPlayerID])
+        nowAct=env.getActListMax(firstallAction)
+        env.dfsPrintActList(firstallAction)  # 输出先手动作集合
+        nowAct.println()
+        act[firstPlayerID] = firstPlayerPolicy(firstallAction)#获取动作
         isSeq, canSeq = env.judgeSeqUse(act[firstPlayerID], firstPlayerID, sortCardList2)
         if isSeq and canSeq == False:  # 如果不能甩
             print("不能甩！！！")
@@ -82,7 +87,7 @@ def randomPlayGame(env):#4个人双方随机游戏
         # elif isSeq:
         #     print("能甩！！！")
         firstKind=env.getActKind(act[firstPlayerID])
-        env.useCardsContainINF(env.players[firstPlayerID], act[firstPlayerID], firstKind, randomUpdateINF,sortCardList2[firstPlayerID])
+        env.useCardsContainINF(epoch,env.players[firstPlayerID], act[firstPlayerID], firstKind, randomUpdateINF,sortCardList2[firstPlayerID])
         # print("玩家", firstPlayerID)
         # print(env.players[firstPlayerID].cards_decorList)
         # env.dfsPrintActList(sortCardList2[firstPlayerID])
@@ -91,15 +96,23 @@ def randomPlayGame(env):#4个人双方随机游戏
         # print(firstKind)
         # act[firstPlayerID].println()
         for i in range(1,4):
+
             nextID=(firstPlayerID+i)%4
             act[nextID]= Action()
+
+            baseFea = getBaseFea(env, nextID)
+            actFea = getActionFeature(act)
+            # print(baseFea.shape,actFea.shape)
+            x=net.forward_base(baseFea,actFea)
+            # print(x.shape)
             # act[nextID].println()
             for a in act[firstPlayerID].one:
-                li=otherUseCards(env, firstPlayerID, nextID, firstKind, sortCardList2, [a])
+                li=otherUseCards(epoch,env, firstPlayerID, nextID, firstKind, sortCardList2, [a])
                 act[nextID].add(li)
             for dou in act[firstPlayerID].double:
-                act[nextID].addDou(otherUseCards(env, firstPlayerID, nextID, firstKind,sortCardList2, dou))
+                act[nextID].addDou(otherUseCards(epoch,env, firstPlayerID, nextID, firstKind,sortCardList2, dou))
             # act[nextID].println()
+
         firstPlayerID,sc,isTer,info=env.game_step(act,firstPlayerID)#评价谁赢，返回赢者id,本轮分数(双方都会得分)，isTer是游戏有木有结束
         # reset
         # env.printAllInfo(act)

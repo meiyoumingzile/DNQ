@@ -286,7 +286,7 @@ class dppo_workers:
             signal_init = traffic_signal.get()
             v = (self.critic_net.forward(state), self.critic_net.forward(next_state))
             tderro = reward + self.gama * v[1]*done - v[0]  # tderro也是优势函数,根据具体问题可以在is_ter==True时阻断
-
+            # tderro = reward + self.gama * critic_net(next_state) * done - critic_net(state)
             critic_loss = tderro.pow(2).mean()
             # do the back-propagation...
             # print("cri_backward ")

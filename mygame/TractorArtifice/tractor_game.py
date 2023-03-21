@@ -3,12 +3,6 @@ import random
 from functools import cmp_to_key
 
 import numpy as np
-import pygame
-import pygame.locals
-import torch
-from pygame.locals import *
-import sys
-import time
 
 CARDS_CNT=108
 CARDS_CNT2=54
@@ -232,7 +226,10 @@ class Player():
                     self.lordNum_cnt[kind]+=1
     def getHandCardCnt(self):
         return self.cardsCnt
-
+    def group(self):#0是庄家，1是闲家
+        return self.dealerTag//2
+    def isDealer(self):#是否为庄家
+        return self.dealerTag<2
     def setNum(self,num):
         self.lordNum = num
     def setLord(self,decor,num):
@@ -314,8 +311,9 @@ class CC():
         # print(self.deck)
     def reset(self,preSc):#更新级牌,但不重置游戏进度,preSc代表上局闲家的分数,返回-1代表继续游戏，返回庄家编号代表谁先达到A
         self.__reset()
-        g = self.getGrade(preSc)#结算等级
-        if g>=0:#换庄
+        grade = self.getGrade(preSc)#结算等级
+        if grade>=0:#换庄
+            g=grade
             self.dealer =(self.dealer+1)%4#换庄
             a = self.round_lordNum[self.dealer%2]
             if 2<=a <= 5:  # 5，10，k不能跳
@@ -327,9 +325,9 @@ class CC():
             else:
                 self.round_lordNum[self.dealer%2]=1
                 if g>0:
-                    return self.dealer
+                    return self.dealer,grade
         else:
-            g = -g
+            g = -grade
             self.dealer = (self.dealer + 2) % 4  # 换同伙坐庄
             a = self.round_lordNum[self.dealer%2]
             if 2 <= a < 5:  # 5，10，k不能跳
@@ -341,9 +339,15 @@ class CC():
             else:
                 self.round_lordNum[self.dealer % 2] = 1
                 if a + g>14:
-                    return self.dealer
+                    return self.dealer,grade
         self.lordNum=self.round_lordNum[self.dealer%2]
-        return -1
+        return -1,grade
+    def getWinPlayer(self):
+        grade = self.getGrade(self.sumSc)  # 结算等级
+        winplayer=self.dealer
+        if grade>=0:
+            winplayer=(winplayer+1)%4
+        return winplayer
     def setDealerID(self,dealer):
         self.players[dealer].dealerTag=0
         self.players[(dealer+1)%4].dealerTag = 2
@@ -446,7 +450,7 @@ class CC():
                 break
             # print(sortCardList)
             li[2].sort(key=cmp_to_key(self._sortCardList_cmp2))
-    def _useCardsContainINF(self,p:Player, act:list, kind,fun,sortCardList=None):#sortCardList代表分好类的牌，这个牌也会跟着变
+    def _useCardsContainINF(self,roundId,p:Player, act:list, kind,fun,sortCardList=None):#sortCardList代表分好类的牌，这个牌也会跟着变
         actlen=len(act)
         if actlen==0:
             return
@@ -461,7 +465,7 @@ class CC():
             return
         decInd = [0, 0, 0, 0, 0]
         for i in range(m,actlen):#寻找所有INF
-            k,j=fun(p,act[0:i], kind)#返回卡牌编号)
+            k,j=fun(roundId,p,act[0:i], kind)#返回卡牌编号)
             act[i]=p.cards_decorList[k][j]
             self.__delCard(p, j,k)
             decInd[k] += 1
@@ -476,10 +480,10 @@ class CC():
             p.cards_decorLen[k] = j
         self._updateSortCardList(sortCardList, act)
 
-    def useCardsContainINF(self,p:Player, act:Action, kind,fun,sortCardList=None):  # 替换动作里的INF,传入sortCardList2代表该玩家的手牌分组，会互相重叠，act是已经选好的动作，kind是先手玩家所出的颜色。fun是跟牌的决策策略
-        self._useCardsContainINF(p,act.one,kind,fun,sortCardList)
+    def useCardsContainINF(self,roundId,p:Player, act:Action, kind,fun,sortCardList=None):  # 替换动作里的INF,传入sortCardList2代表该玩家的手牌分组，会互相重叠，act是已经选好的动作，kind是先手玩家所出的颜色。fun是跟牌的决策策略
+        self._useCardsContainINF(roundId,p,act.one,kind,fun,sortCardList)
         for dou in act.double:
-            self._useCardsContainINF(p,dou, kind, fun,sortCardList)
+            self._useCardsContainINF(roundId,p,dou, kind, fun,sortCardList)
     def checkReDealCards(self):
         if self.players[0].getLordCnt()+ self.players[2].getLordCnt()<10:
             return True
@@ -509,31 +513,26 @@ class CC():
         self.printCardsList(self.deck[-8:])
         print("")
 
-    def __dfsPrintActList(self,newLi, li0,printFun=None):#printFun是打印这张牌的条件
-        if isinstance(li0,np.ndarray):
-            n=li0.shape[0]
-        else:
-            n=len(li0)
-
-        for i in range(n):
-            if isinstance(li0[i],int) or isinstance(li0[i],np.int32) or isinstance(li0[i],np.int64):
-                if printFun==None or printFun(li0[i]):
-                    newLi.append(cardToString(li0[i]))
-            elif isinstance(li0[i],Action):
-                if printFun==None or printFun(li0[i]):
-                    newLi.append(li0[i].toString())
-            else:
-                t=[]
-                self.__dfsPrintActList(t,li0[i])
-                if printFun==None or printFun(t):
-                    newLi.append(t)
+    # def __dfsPrintActList(self,newLi, li0,printFun=None):#printFun是打印这张牌的条件
+    #     if isinstance(li0,np.ndarray):
+    #         n=li0.shape[0]
+    #     else:
+    #         n=len(li0)
+    #
+    #     for i in range(n):
+    #         if isinstance(li0[i],int) or isinstance(li0[i],np.int32) or isinstance(li0[i],np.int64):
+    #             if printFun==None or printFun(li0[i]):
+    #                 newLi.append(cardToString(li0[i]))
+    #         elif isinstance(li0[i],Action):
+    #             if printFun==None or printFun(li0[i]):
+    #                 newLi.append(li0[i].toString())
+    #         else:
+    #             t=[]
+    #             self.__dfsPrintActList(t,li0[i])
+    #             if printFun==None or printFun(t):
+    #                 newLi.append(t)
     def dfsPrintActList(self, li,printFun=None):
-        newLi=[]
-        if isinstance(li,Action):
-            newLi.append(li.toString())
-        else:
-            self.__dfsPrintActList(newLi,li,printFun)
-        print(newLi)
+        dfsPrintActList(li,printFun)
     def shuffleDeck(self,T=5):
         up=len(self.deck)-1
         while(T>0):
@@ -1088,17 +1087,18 @@ class CC():
             self.sumSc+=sc
         if self.playerTable_i[0]>=HANDCARD_CNT:#游戏结束,结算底牌分数
             sc_under = rate=0
+            # if self.players[playerId].dealerTag > 1:  # 不是庄家赢
+            for a in self.underCards:  # 结算底牌分数
+                num = getNum(a)  # 点数，[1,13]王是14
+                sc_under += fenInd[num]  # 分数
+            rate = 2
+            if n > 1:  # 判断倍数
+                doubleCnt = actList4[playerId].getDouleCnt() * 2
+                if doubleCnt > 0:  # 每有一个对子，倍数+2
+                    rate = 2 + doubleCnt
+                else:  # 普通甩牌没有对子，倍数+1
+                    rate = 2 + 1  # 普通甩牌为3倍
             if self.players[playerId].dealerTag>1:#不是庄家赢
-                for a in self.underCards:#结算底牌分数
-                    num = getNum(a) # 点数，[1,13]王是14
-                    sc_under += fenInd[num]  # 分数
-                rate=2
-                if n>1:#判断倍数
-                    doubleCnt=actList4[playerId].getDouleCnt()*2
-                    if doubleCnt>0:#每有一个对子，倍数+2
-                        rate=2+doubleCnt
-                    else:#普通甩牌没有对子，倍数+1
-                        rate=2+1#普通甩牌为3倍
                 self.sumSc += sc_under*rate
             return playerId, sc,True,{"fen":sc_under*rate}
         return playerId,sc,False,{}#返回赢得玩家id，本轮得分，是否结束游戏，结算信息
@@ -1116,6 +1116,7 @@ class CC():
         self.setOrder()
     def getLord(self):
         return self.lordNum+self.lordDecor*13
+
     def sortPlayerHand(self,player):
         player.cards = sorted(player.cards, key=cmp_to_key(self._sortCardList_cmp1))
         for i in range(5):
@@ -1137,6 +1138,25 @@ class CC():
             num=getNum(a)
             ans+=fenInd[num]
         return ans
+    def _getActListMaxCmp(self,a:Action,b:Action):
+        if a.len==b.len:
+            la,lb=a.getDouleCnt(),b.getDouleCnt()
+            if la==lb and la==0:
+                return self.orderInd[b.one[0]]-self.orderInd[a.one[0]]
+            elif la==lb:
+                for i in range(min(len(a.double),len(b.double))):
+                    if len(a.double[i])!=len(b.double[i]):
+                        return len(b.double[i])-len(a.double[i])
+                else:
+                    return self.orderInd[b.double[0][0]]-self.orderInd[a.double[0][0]]
+            return lb-la
+        return b.len-a.len
+    def getActListMax(self,allActionList):#从动作列表里寻找最大的动作
+        for act in allActionList:
+            act.sort(self)
+        allActionList.sort(key=cmp_to_key(self._getActListMaxCmp))
+        return allActionList[0]
+
 
     def printAllInfo(self, act):  # act代表4个人每个人出的牌,类型是Action
         for i in range(4):
@@ -1147,7 +1167,8 @@ class CC():
     def printUnderCards(self):  # act代表4个人每个人出的牌
         self.printCardsList(self.deck[-8:])
 
-def randomUpdateINF(p:Player,act:list, kind):#随机选取动作，kind是第一个出牌的玩家的花色。返回种类和在cards_decorList中位置的编号
+
+def randomUpdateINF(roundId,p:Player,act:list, kind):#随机选取动作，kind是第一个出牌的玩家的花色。返回种类和在cards_decorList中位置的编号
     actList=[]
     for j in range(p.cards_decorLen[kind]):#先看本花色有木有
         if p.cards_decorList[kind][j]!=0:
@@ -1175,6 +1196,37 @@ def getAllAct(self, sortCardsList, p: Player, cardsList_max, kind):  # sortCards
                 a = p.cards_decorList[kind][i]
                 if self.orderInd[a] > self.orderInd[cardsList_max[0]]:
                     ansUp.append([a])
+def getActListFen(actList:list):#得到动作列表的所有分
+    ans=0
+    for act in actList:
+        ans+=act.getFen()
+    return ans
+
+def __dfsPrintActList(newLi, li0,printFun=None):#printFun是打印这张牌的条件
+    if isinstance(li0,np.ndarray):
+        n=li0.shape[0]
+    else:
+        n=len(li0)
+
+    for i in range(n):
+        if isinstance(li0[i],int) or isinstance(li0[i],np.int32) or isinstance(li0[i],np.int64):
+            if printFun==None or printFun(li0[i]):
+                newLi.append(cardToString(li0[i]))
+        elif isinstance(li0[i],Action):
+            if printFun==None or printFun(li0[i]):
+                newLi.append(li0[i].toString())
+        else:
+            t=[]
+            __dfsPrintActList(t,li0[i])
+            if printFun==None or printFun(t):
+                newLi.append(t)
+def dfsPrintActList(li,printFun=None):
+    newLi=[]
+    if isinstance(li,Action):
+        newLi.append(li.toString())
+    else:
+        __dfsPrintActList(newLi,li,printFun)
+    print(newLi)
 # env=CC()
 # env.dealCards(None,0,5,0)#发牌测试
 # # env.dfsPrintActList([9,27])
