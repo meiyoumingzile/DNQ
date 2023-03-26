@@ -28,7 +28,7 @@ def chief_worker(args,num_workers, traffic_signal, critic_counter, actor_counter
         if actor_counter.get() >= num_workers:
             for n, p in actor_shared_model.named_parameters():
                 p.grad = actor_shared_grad_buffer.grads[n + '_grad'].cuda(args.cudaID)
-
+            #
             # start to reset the buffer....
             actor_optimizer.step()
 

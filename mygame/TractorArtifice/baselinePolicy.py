@@ -4,7 +4,7 @@ import numpy as np
 from functools import cmp_to_key
 
 import tractor_game
-from DNQ.mygame.TractorArtifice.cheater import mkDeck, cheator1
+# from DNQ.mygame.TractorArtifice.cheater import mkDeck, cheator1
 from tractor_game import Player,fenInd,getNum,Card,getDecor,CC
 env=CC()
 def _baselinecmp(a,b):#比较两组牌大小。返回1是a大，返回0是b大

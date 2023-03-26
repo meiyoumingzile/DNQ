@@ -72,9 +72,9 @@ def randomPlayGame(env):#4个人双方随机游戏
             # allAct[i]=env.getMaxCards(sortCardList1[i],env.players[i])
             # env.dfsPrintActList(allAct[i])
         firstallAction=env.getAllFirstAct(sortCardList1[firstPlayerID],env.players[firstPlayerID])
-        nowAct=env.getActListMax(firstallAction)
-        env.dfsPrintActList(firstallAction)  # 输出先手动作集合
-        nowAct.println()
+        # nowAct=env.getActListMax(firstallAction)
+        # env.dfsPrintActList(firstallAction)  # 输出先手动作集合
+        # nowAct.println()
         act[firstPlayerID] = firstPlayerPolicy(firstallAction)#获取动作
         isSeq, canSeq = env.judgeSeqUse(act[firstPlayerID], firstPlayerID, sortCardList2)
         if isSeq and canSeq == False:  # 如果不能甩
@@ -100,10 +100,10 @@ def randomPlayGame(env):#4个人双方随机游戏
             nextID=(firstPlayerID+i)%4
             act[nextID]= Action()
 
-            baseFea = getBaseFea(env, nextID)
-            actFea = getActionFeature(act)
-            # print(baseFea.shape,actFea.shape)
-            x=net.forward_base(baseFea,actFea)
+            # baseFea = getBaseFea(env, nextID,)
+            # actFea = getActionFeature(act)
+            # # print(baseFea.shape,actFea.shape)
+            # x=net.forward_base(baseFea,actFea)
             # print(x.shape)
             # act[nextID].println()
             for a in act[firstPlayerID].one:
@@ -118,10 +118,12 @@ def randomPlayGame(env):#4个人双方随机游戏
         # env.printAllInfo(act)
         if isTer :
             # env.printUnderCards()
-            # print(firstPlayerID,str(env.sumSc))
-            playerId=env.reset(env.sumSc)#重置游戏，-1代表继续,否则代表先达到A的玩家。
-            # print(playerId,"\n")
-            return playerId
+            sc=env.sumSc
+            print(sc, env.dealer%2,env.round_lordNum)
+            playerId,grade=env.reset(env.sumSc)#重置游戏，-1代表继续,否则代表先达到A的玩家。
+            winPlayer=env.getWinPlayer()
+            print(winPlayer)
+            return playerId,grade
         epoch+=1
     return 5
 
@@ -134,12 +136,12 @@ game_epoch=0
 while(True):
     env.reset_game()
     for game_i in range(100):
-        playerId=randomPlayGame(env)
+        playerId,grade=randomPlayGame(env)
         if(playerId!=-1):
-            # print("先到到A的是:"+str(playerId%2)+","+str(playerId%2+2))
+            print("先到到A的是:"+str(playerId%2)+","+str(playerId%2+2))
             break
         game_epoch+=1
-    print(game_epoch)
+    # print(game_epoch)
 # ans=[]
 # for i in range(1,109):
 #     ans.append(tractor_game.cardToString(i))

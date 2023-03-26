@@ -12,14 +12,23 @@ import os
 # start the main function...
 parser = argparse.ArgumentParser()
 parser.add_argument('--isInitPar', type=bool, default=False)
-parser.add_argument('--cudaID', type=int, default=1)
-parser.add_argument('--value_lr', type=float, default=0.00001)
-parser.add_argument('--policy_lr', type=float, default=0.00001)
+parser.add_argument('--cudaIDList', type=list, default=[0])
+parser.add_argument('--value_lr', type=float, default=0.001)
+parser.add_argument('--policy_lr', type=float, default=0.001)
 parser.add_argument('--learn_step', type=int, default=50)
 parser.add_argument('--collection_length', type=int, default=1)
-parser.add_argument('--value_step', type=int, default=5)
-parser.add_argument('--policy_step', type=int, default=5)
+parser.add_argument('--dataUseCnt', type=int, default=1)#数据利用次数
 parser.add_argument('--env_name', type=str, default="tractor")
+parser.add_argument('--trainlist', type=list, default=[2,1,2,1])#初始时训练那个人
+parser.add_argument('--shape', type=tuple, default=(1,350))#初始时训练那个人
+parser.add_argument('--gama', type=float, default=1)
+parser.add_argument('--lanta', type=float, default=1)
+parser.add_argument('--rewardFun', type=str, default="setReward")
+parser.add_argument('--picName', type=str, default="xishu")
+
+# args = parser.parse_args()
+# worker=DppoWorkers(0,None,args)
+# worker.train_agent(None)
 
 if __name__ == '__main__':
     # get the arguments...

@@ -338,7 +338,7 @@ class CC():
                 self.round_lordNum[self.dealer % 2] = min(a + g, 13)
             else:
                 self.round_lordNum[self.dealer % 2] = 1
-                if a + g>14:
+                if a==1 or a==13 and g>1:
                     return self.dealer,grade
         self.lordNum=self.round_lordNum[self.dealer%2]
         return -1,grade
