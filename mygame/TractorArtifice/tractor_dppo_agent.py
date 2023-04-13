@@ -2,16 +2,16 @@ import argparse
 import datetime
 import os
 import random
-
+import time
+from collections import deque
 import numpy as np
 import torch
 import tractor_game
-from tractor_utils import getNowTimePath, drawBrokenLine
+from tractor_utils import getNowTimePath, drawBrokenLine, MACD, wInfo
 from baselinePolicy import baselineColdeck
 from tractor_game import CC,Action,Player,dfsPrintActList
-from encoder import handTo01code, getActionFeature, getBaseFea, actTo01code
-from encoder import cardsTo01code
-from tractor_network import AgentNet
+from encoder import handTo01code, getActionFeature, getBaseFea, actTo01code, cardsTo01code, addActionFeature
+from tractor_network_res import AgentNet, AgentCriNet
 import pyro
 import pyro.distributions as dist
 
@@ -21,12 +21,13 @@ from tractor_game import CC
 
 
 class Dppoagent:
-    def __init__(self,id,args,worker):#代表这个智能体
+    def __init__(self,id,args,critic_net,worker):#代表这个智能体
         self.id=id
         self.args=args
         self.worker=worker
         in_fea=345#有待输入
-        self.net = AgentNet().cuda(self.worker.cudaID)
+        self.net = AgentNet(args.infea).cuda(self.worker.cudaID)
+        self.critic_net=critic_net
         # print(self.worker.cudaID,next(self.net.lstm1.parameters()).device)
         self.baseFea=None
         self.lock=False
@@ -39,21 +40,28 @@ class Dppoagent:
             self.galanPow[i]=self.galanPow[i-1]*args.gama*self.lanta
         self.initMenory()
         self.p=worker.env.players[id]
-        self.CLIP_EPSL = 0.2
-        self.initNet()
+        self.CLIP_EPSL = self.args.CLIP_EPSL
+        # self.initNet()
     def initNet(self):
-        self.shared_model=self.worker.shared_model
-        baseNet=list(self.net.mlp_base.parameters())+list(self.net.lstm1.parameters())
-        self.optimizer = [torch.optim.Adam(list(self.net.mlp_q.parameters())+baseNet, lr=self.args.value_lr),
-                          torch.optim.Adam(list(self.net.mlp_act1.parameters())+baseNet, lr=self.args.value_lr),
-                          torch.optim.Adam(list(self.net.mlp_act2.parameters())+baseNet, lr=self.args.value_lr)]
+        baseNet=list(self.net.mlp_base.parameters())+list(self.net.lstm1.parameters())+list(self.net.lstm2.parameters())
+        self.optimizer = [torch.optim.Adam(self.critic_net.parameters(), lr=self.args.value_lr,eps=1e-5),
+                          torch.optim.Adam(list(self.net.mlp_act1.parameters()), lr=self.args.value_lr,eps=1e-5),
+                          torch.optim.Adam(list(self.net.mlp_act2.parameters())+baseNet, lr=self.args.value_lr,eps=1e-5)]
+
+    def initPar(self,roundId,firstPlayerID,firstKind,nowPlayerId):
+        self.firstPlayerID=firstPlayerID
+        self.firstKind=firstKind
+        self.nowPlayerId=nowPlayerId
+        if roundId==0:
+            self.hisActTensor =torch.zeros((1,1,59)).cuda(self.worker.cudaID)
+        else:
+            self.hisActTensor=self.worker.historyAction[:,0:roundId*4].cuda(self.worker.cudaID)
     def initMenory(self):#初始化memory,来记录本局游戏的数据
         self.memoryAllAct = [[] for i in range(25)]
         self.memoryProb = [[] for i in range(25)]#储存当时神经网络决策的动作和概率
         self.memoryBinProb = [[] for i in range(25)]
         self.memoryBase = [[] for i in range(25)]
         self.memoryOtherAct = [[] for i in range(25)]
-        self.memoryCriticVal = [[] for i in range(25)]
         self.memoryReward = [0 for i in range(25)]
     def printMemory(self):
         dfsPrintActList(self.memoryAllAct)
@@ -66,8 +74,8 @@ class Dppoagent:
         # print(otherAct)
         self.memoryBase[i].append(baseFea)
         self.memoryOtherAct[i].append(othertActFea)
-        x=self.net.forward_q(base_out.cuda(self.worker.cudaID))
-        self.memoryCriticVal[i].append(x.cpu())
+        # x=self.critic_net.forward(baseFea.cuda(self.worker.cudaID),othertActFea.cuda(self.worker.cudaID))
+        # self.memoryCriticVal[i].append(x.cpu())
         self.memoryBinProb[i].append(binact)
     def pushReward(self,i,reward):
         self.memoryReward[i] =reward
@@ -77,7 +85,7 @@ class Dppoagent:
             return
     def chooseFirstActFromMax2(self,roundId,env, otherAct,allActionList:list):#无脑出最大的
         return env.getActListMax(allActionList)
-    def chooseFirstActFromMax1(self,roundId,env, otherAct,allActionList:list):#无脑出个数最多的
+    def chooseFirstActFromMax1(self, roundId, env, otherAct, allActionList: list, firstPlayerID):  # 无脑出个数最多的
         maxLen = 0
         maxLenActList = []
         for a in allActionList:  # 找出长度最长的动作
@@ -87,26 +95,32 @@ class Dppoagent:
                 maxLenActList.append(allActionList[i])
         act_i = random.randint(0, len(maxLenActList) - 1)
         return maxLenActList[act_i]
-    def chooseFirstActFromRandom(self,roundId,env, otherAct,allActionList:list):#随机出牌
+
+    def chooseFirstActFromRandom(self, roundId, env, otherAct, allActionList: list, firstPlayerID):  # 随机出牌
         act_i = random.randint(0, len(allActionList) - 1)
         return allActionList[act_i]
-    def checkProb(self,probList):
+
+    def checkProb(self, probList):
         # print(len(probList))
         for i in range(len(probList)):
-            if probList[i]<0:
+            if probList[i] < 0:
                 print(probList)
-                probList[i]=0
-    def chooseFirstActFromNet(self,roundId,env, otherAct,allActionList:list):#从神经网络获取
-        baseFea = getBaseFea(env,0,self.id,self.p.isDealer())  # self.id
-        otherActFea = getActionFeature(otherAct)
+                probList[i] = 0
+
+    def chooseFirstActFromNet(self, roundId, env, otherAct, allActionList: list, firstPlayerID):  # 从神经网络获取
+        baseFea = getBaseFea(env, 0, self.id, self.p.isDealer())  # self.id
+        otherActFea = getActionFeature(otherAct, firstPlayerID, 4)
         # print(self.worker.cudaID,next(self.net.parameters()).device)
-        base_out = self.net.forward_base(baseFea.cuda(self.worker.cudaID), otherActFea.cuda(self.worker.cudaID))  # base的特征向量
+        base_out = self.net.forward_base(baseFea.cuda(self.worker.cudaID), otherActFea.cuda(self.worker.cudaID),
+                                         self.hisActTensor)  # base的特征向量
         # if np.random.uniform(0, 1) < self.epsl:
         #     ansAct = allActionList[np.random.randint(0, len(allActionList))]
         probList = torch.zeros((len(allActionList)))
         for i in range(len(allActionList)):  # 遍历所有动作
-            nowActTensor = actTo01code(allActionList[i]).unsqueeze(dim=0)
+            nowActTensor = actTo01code(allActionList[i], firstPlayerID).unsqueeze(dim=0)
+            # print(nowActTensor)
             probList[i] = self.net.forward_act(base_out, nowActTensor.cuda(self.worker.cudaID)).view(-1)[0].cpu()
+        # print(probList)
         probList = torch.softmax(probList, dim=0).cpu().detach()
         self.checkProb(probList)
         try:
@@ -114,11 +128,14 @@ class Dppoagent:
         except RuntimeError as e:
             actid = 0
             print(probList)
+            exit()
             # print(actid)
         # print(baseFea)
-        self.pushMemory( roundId, [a.tolist() for a in allActionList],baseFea,base_out,otherActFea, (actid,probList[actid]) )
+        self.pushMemory(roundId, [a.tolist() for a in allActionList], baseFea, base_out, otherActFea,
+                        (actid, probList[actid]))
         return allActionList[actid]
-    def updateINF(self,roundId, p:Player, act: list, kind):#kind是第一个出牌的玩家的花色。返回种类和在cards_decorList中位置的编号
+
+    def updateINF(self, roundId, p: Player, act: list, kind):  # kind是第一个出牌的玩家的花色。返回种类和在cards_decorList中位置的编号
         actList = []
         for j in range(p.cards_decorLen[kind]):  # 先看本花色有木有
             if p.cards_decorList[kind][j] != 0:
@@ -132,15 +149,18 @@ class Dppoagent:
                         actList.append((i, j))
         # ans = actList[random.randint(0, len(actList) - 1)]
         baseFea = getBaseFea(self.worker.env, self.useSeq, self.id, self.p.isDealer())  # self.id
-        otherActFea=getActionFeature(self.otherAct)
-        base_out = self.net.forward_base(baseFea.cuda(self.worker.cudaID), otherActFea.cuda(self.worker.cudaID))  # base的特征向量
+        otherActFea = getActionFeature(self.otherAct, self.firstPlayerID, 4)
+        addActionFeature(otherActFea, self.seqList, self.firstPlayerID, p.id)
+        # print(otherActFea)
+        base_out = self.net.forward_base(baseFea.cuda(self.worker.cudaID), otherActFea.cuda(self.worker.cudaID),
+                                         self.hisActTensor)  # base的特征向量
         probList = torch.zeros((len(actList)))
-        allActionList=[]
+        allActionList = []
         for i in range(len(actList)):  # 遍历所有动作
-            a=actList[i]
-            nowAct=Action([p.cards_decorList[a[0]][a[1]]])
+            a = actList[i]
+            nowAct = Action([p.cards_decorList[a[0]][a[1]]])
             allActionList.append([p.cards_decorList[a[0]][a[1]]])
-            nowActTensor = actTo01code(nowAct).unsqueeze(dim=0)
+            nowActTensor = actTo01code(nowAct, self.nowPlayerId).unsqueeze(dim=0)
             # print(self.baseFea.shape,nowActTensor.shape)
             probList[i] = self.net.forward_act(base_out, nowActTensor.cuda(self.worker.cudaID)).view(-1)[0].cpu()
         probList = torch.softmax(probList, dim=0).cpu().detach()
@@ -150,71 +170,82 @@ class Dppoagent:
         except RuntimeError as e:
             actid = 0
             print(probList)
+            exit()
         # self.otherAct[p.id].
-        self.pushMemory(roundId, allActionList,baseFea,base_out, otherActFea,(actid, probList[actid]))
+        self.seqList.append(p.cards_decorList[a[0]][a[1]])  # 加入跟牌动作列表
+        self.pushMemory(roundId, allActionList, baseFea, base_out, otherActFea, (actid, probList[actid]))
         return actList[actid][0], actList[actid][1]
-    def chooseOtherAct(self,roundId,useSeq,env, otherAct, ansUp, ansDown, firstKind, sortCardList2):#ansUp代表较大的动作，ansDown代表较小的动作
+
+    def chooseOtherAct(self, roundId, useSeq, env, otherAct, ansUp, ansDown,
+                       sortCardList2):  # ansUp代表较大的动作，ansDown代表较小的动作
         nu = len(ansUp)
         nd = len(ansDown)
-        baseFea = getBaseFea(env, useSeq, self.id, self.p.isDealer()).cuda(self.worker.cudaID)#self.id
-        otherActFea = getActionFeature(otherAct).cuda(self.worker.cudaID)
+        baseFea = getBaseFea(env, useSeq, self.id, self.p.isDealer()).cuda(self.worker.cudaID)  # self.id
+        otherActFea = getActionFeature(otherAct, self.firstPlayerID, 4).cuda(self.worker.cudaID)
         # print(actFea)
-        base_out=self.net.forward_base(baseFea,otherActFea)#base的特征向量
+        base_out = self.net.forward_base(baseFea, otherActFea, self.hisActTensor)  # base的特征向量
         # print(base_out.shape)
-        allActionList=ansUp
-        fpTuple=None
-        if nu>0 and nd>0:
-            fpprob=self.net.forward_bin(base_out).squeeze(dim=0).cpu().detach()#选择出大的还是小的,1是大，0是小
-            torch.softmax(fpprob, dim=0).cpu().detach()
-            # print(fpprob.shape)
-            self.checkProb(fpprob)
+        allActionList = ansUp
+        fpTuple = None
+        if nu > 0 and nd > 0:
+            fpprob = self.net.forward_bin(base_out).squeeze(dim=0).cpu().detach()  # 选择出大的还是小的,1是大，0是小
+            # torch.softmax(fpprob, dim=0).cpu().detach()
+            # # print(fpprob.shape)
+            # self.checkProb(fpprob)
             try:
-                fp=torch.multinomial(fpprob, num_samples=1, replacement=True)[0].cpu().detach()
+                fp = torch.multinomial(fpprob, num_samples=1, replacement=True)[0].cpu().detach()
             except RuntimeError as e:
                 fp = 0
                 print(fpprob)
+                exit()
             # print(fp)
-            fpprob=fpprob[fp]
-            fpTuple=(fp,fpprob)
+            fpprob = fpprob[fp]
+            fpTuple = (fp, fpprob)
             # print(fpprob)
-            if fp==0:
-                allActionList=ansDown
-        elif nd>0:
+            if fp == 0:
+                allActionList = ansDown
+        elif nd > 0:
             allActionList = ansDown
+            fpTuple = ((0, 1))
+        else:
+            fpTuple = ((1, 1))
         # print(allActionList)
         # [[53, 53], [38, 38], [32, 32], [1000, 1000]]
-        haveINF=False
-        for a in allActionList[0]:#寻找是否有INF
-            if a== tractor_game.INF:
-                haveINF=True
+        haveINF = False
+        for a in allActionList[0]:  # 寻找是否有INF
+            if a == tractor_game.INF:
+                haveINF = True
                 break
-        if haveINF:#把动作拆散
-            ansAct= allActionList[0]
+        if haveINF:  # 把动作拆散
+            ansAct = allActionList[0]
             self.baseFea = base_out
-            self.otherAct = otherAct#这两个变量用于传递到updateINF里面
-            self.useSeq=useSeq
-            env._useCardsContainINF(roundId,env.players[self.id], ansAct, firstKind, self.updateINF, sortCardList2[self.id])
+            self.otherAct = otherAct  # 这两个变量用于传递到updateINF里面
+            self.useSeq = useSeq
+            self.seqList = []  # 跟牌的列表
+            env._useCardsContainINF(roundId, env.players[self.id], ansAct, self.firstKind, self.updateINF,
+                                    sortCardList2[self.id])
         else:
 
-            probList=torch.zeros((len(allActionList)))
-            for i in range(len(allActionList)):#遍历所有动作
-                nowActTensor=cardsTo01code(allActionList[i]).unsqueeze(dim=0)
+            probList = torch.zeros((len(allActionList)))
+            for i in range(len(allActionList)):  # 遍历所有动作
+                nowActTensor = cardsTo01code(allActionList[i], self.nowPlayerId).unsqueeze(dim=0)
                 # print(nowActTensor.shape)
-                probList[i]=self.net.forward_act(base_out,nowActTensor.cuda(self.worker.cudaID)).view(-1)[0].cpu()
-            probList=torch.softmax(probList, dim=0).cpu().detach()
+                probList[i] = self.net.forward_act(base_out, nowActTensor.cuda(self.worker.cudaID)).view(-1)[0].cpu()
+            probList = torch.softmax(probList, dim=0).cpu().detach()
             self.checkProb(probList)
             try:
                 actid = torch.multinomial(probList, num_samples=1, replacement=True)[0].cpu().detach()
             except RuntimeError as e:
-                actid=0
+                actid = 0
                 print(probList)
+                exit()
             # actid = torch.multinomial(probList, num_samples=1, replacement=True)[0].cpu().detach()
-            ansAct=allActionList[actid]
-            self.pushMemory(roundId,allActionList,baseFea,base_out, otherActFea,(actid,probList[actid]),fpTuple)
-            env._useCardsContainINF(roundId,env.players[self.id], ansAct, firstKind, None, sortCardList2[self.id])
+            ansAct = allActionList[actid]
+            self.pushMemory(roundId, allActionList, baseFea, base_out, otherActFea, (actid, probList[actid]), fpTuple)
+            env._useCardsContainINF(roundId, env.players[self.id], ansAct, self.firstKind, None, sortCardList2[self.id])
         return ansAct
 
-    def chooseOtherAct_fix(self,roundId,useSeq,env, otherAct, ansUp, ansDown, firstKind, sortCardList2):#固定策略，固定选取第0个
+    def chooseOtherAct_fix(self, roundId, useSeq, env, otherAct, ansUp, ansDown, sortCardList2):  # 固定策略，固定选取第0个
         nu = len(ansUp)
         nd = len(ansDown)
         allActionList = ansUp
@@ -233,173 +264,251 @@ class Dppoagent:
                 haveINF = True
                 break
         if haveINF:  # 把动作拆散
-            env._useCardsContainINF(roundId, env.players[self.id], ansAct, firstKind, tractor_game.randomUpdateINF,
+            env._useCardsContainINF(roundId, env.players[self.id], ansAct, self.firstKind, tractor_game.randomUpdateINF,
                                     sortCardList2[self.id])
         else:
-            env._useCardsContainINF(roundId, env.players[self.id], ansAct, firstKind, None, sortCardList2[self.id])
+            env._useCardsContainINF(roundId, env.players[self.id], ansAct, self.firstKind, None, sortCardList2[self.id])
         return allActionList[0]
-    def initLearn(self,roundUp,rewardList):#使用GAE计算优势函数,要计算每一步的Gt-critic(state)
-        self.roundInd=np.zeros((roundUp+1),dtype=np.int32)#roundId转换advantages的id
-        self.detlaList = []
-        self.Gt=[]
-        G0=0
-        id=0
-        for i in range(roundUp):##计算deala
-            self.roundInd[i] = id
-            id +=len(self.memoryCriticVal[i])
-            G0 += rewardList[i] * self.gamaPow[id]
-        self.roundInd[roundUp] = id
-        self.Gt.append(G0)
-        # print(G0,self.args.gama)
-        for i in range(roundUp):##计算deala
-            m=len(self.memoryCriticVal[i])
-            for j in range(0,m):
-                criTensor=self.memoryCriticVal[i][j]
-                v=criTensor[0][0].detach()
-                # print(G0,q)
-                self.detlaList.append((G0 - v).clone())
-                self.Gt.append(G0)
-                if j==m-1:
-                    G0 -= rewardList[i]
-                G0 /= self.args.gama
-                # print(G0)
 
-        # print(rewardList)
-        self.advantages=[]#计算GAE优势函数
+    def initLearn(self, roundUp):  #
+        self.roundInd = np.zeros((roundUp + 1), dtype=np.int32)  # roundId转换advantages的id
+        self.indToRound = np.zeros((110), dtype=np.int32)  # roundId转换advantages的id
+        self.stateList = []
+        self.detlaList = []
+        id = 0
+        for i in range(roundUp):  ##计算deala
+            self.roundInd[i] = id
+            n = len(self.memoryBase[i])
+            allActList = self.memoryAllAct[i]
+            actPolicy = self.memoryProb[i]  # 储存当时神经网络决策的动作和概率
+            actPolicy_bin = self.memoryBinProb[i]  # 当时玩家采取的二分类动作,有可能是None
+            for j in range(n):
+                self.indToRound[id + j] = i
+                reward = self.memoryReward[i]
+                if j < n - 1:
+                    reward = 0
+                self.stateList.append((self.memoryBase[i][j], self.memoryOtherAct[i][j], reward,
+                                       actPolicy[j], actPolicy_bin[j], allActList[j]))
+            id += n
+        self.roundInd[roundUp] = id
+
+        up = len(self.stateList)
+        statei = self.stateList[0][0].cuda(self.worker.cudaID)
+        otherActi = self.stateList[0][1].cuda(self.worker.cudaID)
+        hisActi = self.getHisFea(0)
+        prev = self.critic_net.forward(statei, otherActi, hisActi)
+        for i in range(1, up):
+            statei = self.stateList[i][0].cuda(self.worker.cudaID)
+            otherActi = self.stateList[i][1].cuda(self.worker.cudaID)
+            hisActi = self.getHisFea(self.indToRound[i] * 4)
+            reward = self.stateList[i - 1][2]
+            v = self.critic_net.forward(statei, otherActi, hisActi)
+            detla = (reward + v * self.gamaPow[1] - prev).view(-1).detach()
+            self.detlaList.append(detla.clone())
+            prev = v
+        reward = self.stateList[up - 1][2]
+        detla = (reward - prev).view(-1).detach()
+        self.detlaList.append(detla.clone())
+
         adv0 = 0
-        for i in range(len(self.detlaList)):
-            adv0 +=self.galanPow[i]*self.detlaList[i]
-        for i in range(len(self.detlaList)):
-            self.advantages.append(adv0.clone())
+        self.advantages = torch.zeros((up, 1))
+        for i in range(up):
+            adv0 += self.galanPow[i] * self.detlaList[i]
+        for i in range(up):
+            # print(adv0.shape)
+            self.advantages[i] = adv0.clone()
+            # print(adv0.shape,self.detlaList[i].shape)
             adv0 -= self.detlaList[i]
             adv0 /= self.galanPow[1]
         # print(self.advantages)
-    def selflearn(self,roundId,roundUp,rewardList,worker):
-        allActList=self.memoryAllAct[roundId]
-        actPolicy=self.memoryProb[roundId]#储存当时神经网络决策的动作和概率
-        actPolicy_bin=self.memoryBinProb[roundId]#当时玩家采取的二分类动作,有可能是None
-        baseTensor=self.memoryBase[roundId]
-        otherActTensor=self.memoryOtherAct[roundId]
-        n=len(baseTensor)
+        mean = self.advantages.mean()
+        std = self.advantages.std()
+        self.advantages = (self.advantages - mean) / std
 
+    def getHisFea(self,nowInd):
+        x=self.worker.historyAction[:, 0:nowInd]
+        if x.shape[1]==0:
+            x=torch.zeros((x.shape[0],1,x.shape[2]))
+        return x.cuda(self.worker.cudaID)
 
-        for i in range(n):
-            statei = baseTensor[i].cuda(self.worker.cudaID)
-            otherActi=otherActTensor[i].cuda(self.worker.cudaID)
-            # base_out = self.net.forward_base(statei,otherActi)
-            # critic_q = self.net.forward_q(base_out)
-            # tderro = Gt - critic_q  # tderro也是优势函数,根据具体问题可以在is_ter==True时阻断
-            # advantage=tderro.detach()#普通优势函数
-            advantage=self.advantages[self.roundInd[roundId]+i]#得到GAE优势
-            gt = self.Gt[self.roundInd[roundId] + i]
-            # print(advantage)
-            for _ in range(self.args.dataUseCnt):#训练critic
-                self.net.zero_grad()
-                base_out = self.net.forward_base(statei, otherActi)
-                critic_q = self.net.forward_q(base_out)
-                tderro = gt - critic_q#因为自动作没有奖励，所以Q(s,a)都是Gt
+    def selflearn(self,roundUp,rewardList,worker):
+        up=len(self.stateList)
+        # print(self.advantage)
+        for _ in range(self.args.dataUseCnt):  # 训练critic
+            sumLoss_critic = []
+            sumLoss_actor_bin = []
+            sumLoss_actor = []
+            for i in range(up):
+                # (self.memoryBase[i][j], self.memoryOtherAct[i][j], reward,
+                #  actPolicy[j], actPolicy_bin[j], allActList[j])
+                memory=self.stateList[i]
+                statei,otherActi = memory[0].cuda(self.worker.cudaID),memory[1].cuda(self.worker.cudaID)
+                reward=memory[2]
+                actPolicy= memory[3]
+                actPolicy_bin=memory[4]
+                actSpace=memory[5]
+                hisActi = self.getHisFea(self.indToRound[i] * 4)
+                # print(actPolicy_bin)
+                if i==up-1:
+                    next_statei = None
+                    next_otherActi = None
+                    nextHisActi =None
+                else:
+                    next_statei = self.stateList[i+1][0].cuda(self.worker.cudaID)
+                    next_otherActi = self.stateList[i+1][1].cuda(self.worker.cudaID)
+                    nextHisActi = self.getHisFea(self.indToRound[i+1] * 4)
+                advantage=self.advantages[i].cuda(self.worker.cudaID)
+
+                v = self.critic_net.forward(statei,otherActi,hisActi)
+                if next_statei!=None:
+                    next_v=self.critic_net.forward(next_statei,next_otherActi,nextHisActi)
+                    tderro = reward+self.gamaPow[1]*next_v - v#因为自动作没有奖励，所以Q(s,a)都是Gt
+                else:
+                    tderro= reward - v
                 critic_loss = tderro.pow(2).mean()
-                critic_loss.backward()#保存梯度
-                self.optimizer[0].step()
+                # critic_loss.backward()
+                # print(critic_loss.shape)
+                sumLoss_critic.append(critic_loss)
+                # critic_loss.backward()
+                # self.optimizer[0].step()
                 # 下面是更新决策二分类网络
-
-                if actPolicy_bin[i]!=None:
-                    # print(actPolicy_bin[i])
-                    # self.net.zero_grad()
-                    base_out = self.net.forward_base(statei, otherActi)
+                if actPolicy_bin!=None:
+                    # print(actPolicy_bin)
+                    base_out = self.net.forward_base(statei, otherActi,hisActi)
                     nowRate = self.net.forward_bin(base_out)
-                    act=torch.Tensor([[actPolicy_bin[i][0]]]).cuda(self.worker.cudaID).long()
+                    act=torch.Tensor([[actPolicy_bin[0]]]).cuda(self.worker.cudaID).long()
                     nowRate=nowRate.gather(1, act)
-                    preRate =torch.Tensor([[actPolicy_bin[i][1]]]).cuda(self.worker.cudaID)#旧策略
+                    preRate =torch.Tensor([[actPolicy_bin[1]]]).cuda(self.worker.cudaID)#旧策略
                     # print(nowRate.shape,preRate.shape)
                     ratio = torch.exp(torch.log(nowRate) - torch.log(preRate))  # 计算p1/p2防止精度问题
                     surr1 = ratio * advantage
                     surr2 = torch.clamp(ratio, 1 - self.CLIP_EPSL, 1 + self.CLIP_EPSL) * advantage
-                    actor_loss = -torch.max(torch.min(surr1, surr2),0.8*advantage).mean()
-                    actor_loss.backward()
-                    self.optimizer[1].step()
-
+                    actor_loss_bin = (-torch.max(torch.min(surr1, surr2),0.8*advantage)-self.args.entropy_coef*torch.log(nowRate)).mean()
+                    sumLoss_actor_bin.append(actor_loss_bin)
+                    # actor_loss_bin.backward()
+                    # self.optimizer[1].step()
                 #下面是更新act网络
-                self.net.zero_grad()
-                base_out = self.net.forward_base(statei, otherActi)
-                cnt=len(allActList[i])
+                base_out = self.net.forward_base(statei, otherActi,hisActi)
+                cnt=len(actSpace)
                 probList = torch.zeros((cnt)).cuda(self.worker.cudaID)
                 for j in range(cnt):#遍历所有可能
                     # print(allActList[i][j])
-                    actTensor=cardsTo01code(allActList[i][j]).unsqueeze(dim=0).cuda(self.worker.cudaID)
+                    actTensor=cardsTo01code(actSpace[j],self.id).unsqueeze(dim=0).cuda(self.worker.cudaID)
                     x=self.net.forward_act(base_out, actTensor)
                     probList[j] = x.view(-1)[0]
                     # print(probList)
                 probList = torch.softmax(probList, dim=0).unsqueeze(dim=0)
                 # print(probList)
-                act = torch.Tensor([[actPolicy[i][0]]]).cuda(self.worker.cudaID).long()
+                act = torch.Tensor([[actPolicy[0]]]).cuda(self.worker.cudaID).long()
                 nowRate = probList.gather(1, act)
-                preRate = torch.Tensor([[actPolicy[i][1]]]).cuda(self.worker.cudaID)  # 旧策略
+                preRate = torch.Tensor([[actPolicy[1]]]).cuda(self.worker.cudaID)  # 旧策略
                 # print(nowRate.shape,preRate.shape)
                 ratio = torch.exp(torch.log(nowRate) - torch.log(preRate))  # 计算p1/p2防止精度问题
                 surr1 = ratio * advantage
                 surr2 = torch.clamp(ratio, 1 - self.CLIP_EPSL, 1 + self.CLIP_EPSL) * advantage
-                actor_loss = -torch.max(torch.min(surr1, surr2),0.8*advantage).mean()
-                actor_loss.backward()
-                self.optimizer[2].step()
-                self.synParameters()
-    def synParameters(self):
-        shared_grad_buffer.add_gradient(self.net)
-        # after add the gradient, add the counter...
-        counter.increment()
-        # wait for the cheif's signal...
-        while signal_init == traffic_signal.get():
-            pass
+                actor_loss = (-torch.max(torch.min(surr1, surr2),0.8*advantage)-self.args.entropy_coef*torch.log(nowRate)).mean()
+                sumLoss_actor.append(actor_loss)
+                # print(loss_actor,actor_loss)
+                # actor_loss.backward()
+                # self.optimizer[2].step()
+            self.updateNetwork(sumLoss_critic,sumLoss_actor_bin,sumLoss_actor)
+    def updateNetwork(self,sumLoss_critic,sumLoss_actor_bin,sumLoss_actor):
+        signal_init = self.traffic_signal.get()
+        self.critic_net.zero_grad()
+        # self.net.zero_grad()
+        sumLoss_critic=torch.stack(sumLoss_critic).mean()
+        sumLoss_critic.backward()
+        # torch.nn.utils.clip_grad_norm_(self.critic_net.parameters(), 3)
+        self.graBuf_crinet.add_gradient(self.critic_net)  # 分享梯度
 
-        self.net.load_state_dict(self.shared_model.state_dict())
+        if len(sumLoss_actor_bin)>0:
+            self.net.zero_grad()
+            sumLoss_actor_bin = torch.stack(sumLoss_actor_bin).mean()
+            sumLoss_actor_bin.backward()
+            # torch.nn.utils.clip_grad_norm_(self.net.parameters(), 3)
+            self.graBuf_net[0].add_gradient(self.net)  # 分享梯度
+        self.net.zero_grad()
+        sumLoss_actor = torch.stack(sumLoss_actor).mean()
+        sumLoss_actor.backward()
+        # torch.nn.utils.clip_grad_norm_(self.net.parameters(), 3)
+        self.graBuf_net[1].add_gradient(self.net)  # 分享梯度
+
+        self.counter.increment()
+        while signal_init == self.traffic_signal.get():
+            pass
+        # print("player"+str(self.id)+" workerid"+str(self.worker.id)+" epoch:"+str(self.worker.epochid)+" | ")
+        self.shareParToself()
+
+    def shareParToself(self):
+        self.net.load_state_dict(self.shared_net.state_dict())
+        self.critic_net.load_state_dict(self.shared_crinet.state_dict())
+    def initSharedPar(self,graBuf_net,graBuf_crinet,shared_net,shared_crinet,counter,traffic_signal):
+        self.graBuf_net=graBuf_net
+        self.graBuf_crinet = graBuf_crinet
+        self.counter=counter
+        self.traffic_signal=traffic_signal
+        self.shared_net=shared_net
+        self.shared_crinet = shared_crinet
+
 class DppoWorkers:
-    def __init__(self, id, shared_obs_state, args):
+    def __init__(self, id,args,graBuf_netList, graBuf_crinet, shared_net, shared_crinet, counter, traffic_signal,shared_info):
         self.id = id
         self.args = args
-        self.cudaID=args.cudaIDList[0]
+        self.cudaID=args.cudaIDList[id]
         self.env = CC()
-        self.gama = 0.99
-        self.CLIP_EPSL = 0.2
+        self.gama = args.gama
         self.lanta = 0.2
-        self.shared_obs_state = shared_obs_state
-        self.agents=(Dppoagent(0,args,self),Dppoagent(1,args,self),
-                     Dppoagent(2,args,self),Dppoagent(3,args,self))
-        self.trainlist=self.args.trainlist.copy()
-        self.savePath = getNowTimePath()
+        critic_net=AgentCriNet(args.infea).cuda(self.cudaID)
+        self.agents=(Dppoagent(0,args,critic_net,self),Dppoagent(1,args,critic_net,self),
+                     Dppoagent(2,args,critic_net,self),Dppoagent(3,args,critic_net,self))
+        self.trainlist=self.args.trainlist
+        self.savePath = args.savePath
         # print(path)
 
         self.memory_batch = 50
-        MEMORY_CAPACITY = 26
-        self.MEMORY_CAPACITY = MEMORY_CAPACITY
         OVERLAY_CNT = 1  # 针对此游戏的叠帧操作
         self.OVERLAY_CNT = OVERLAY_CNT
         self.rewardFun=getattr(self, self.args.rewardFun)
+        self.historyAction=torch.zeros((1,100,59))
         # beginShape = self.resetPic(self.env.reset()).shape
+        self.shared_net=shared_net
+        self.shared_crinet = shared_crinet
+        self.shared_info=shared_info
+        self.counter = counter
+        self.gloCounter = counter[4]
+        self.gloTraffic_signal = traffic_signal[4]
+        for i in range(4):
+            self.agents[i].initSharedPar(graBuf_netList[i*2:i*2+2], graBuf_crinet, shared_net[i], shared_crinet, counter[i], traffic_signal[i])
 
-
-    def initAllState(self):#初始化游戏状态，返回开始时的状态
-        self.env.reset()
-        return
-    def getGameState(self):
-        li=[handTo01code(self.env.players[i]) for i in range(4)]
-
-        return li,self.env.getNowUsedCards()
+    def pushHistoryAction(self,roundId,act):
+        self.historyAction[:,roundId*4:roundId*4+4]=act
 
     def saveAgentNet(self):
         path=self.savePath
         if not os.path.exists(path):
             os.mkdir(path)
+        torch.save(self.agents[0].critic_net, path + "agentCriticNet.pt")  #
         for i in range(4):
             torch.save(self.agents[i].net, path+"agentNet"+str(i)+".pt")  #
+    def saveSharedAgentNet(self):
+        path=self.savePath
+        if not os.path.exists(path):
+            os.mkdir(path)
+        torch.save(self.shared_crinet, path + "agentCriticNet.pt")  #
+        for i in range(4):
+            torch.save(self.shared_net[i], path+"agentNet"+str(i)+".pt")  #
     def readAgentNet(self,path):
         if not os.path.exists(path):
             print("模型不存在")
             return False
+        p0 = path + "agentCriticNet.pt"
+        critic = torch.load(p0).cuda(self.cudaID)
         for i in range(4):
             p=path + "agentNet" + str(i) + ".pt"
             if not os.path.exists(p):
                 print("模型不存在")
                 return False
+            self.agents[i].critic_net=critic
             self.agents[i].net=torch.load(p).cuda(self.cudaID)
             self.agents[i].initNet()
         print("read success")
@@ -408,41 +517,41 @@ class DppoWorkers:
         selfAllAct = self.env.getAllFirstAct(sortCardList1[firstPlayerID], self.env.players[firstPlayerID])
         # dfsPrintActList(selfAllAct)  # 输出先手动作集合
         if self.args.trainlist[firstPlayerID]==2:
-            ans=self.agents[firstPlayerID].chooseFirstActFromMax1(roundId,self.env, act,selfAllAct)
+            ans=self.agents[firstPlayerID].chooseFirstActFromMax1(roundId,self.env, act,selfAllAct,firstPlayerID)
         elif self.args.trainlist[firstPlayerID]<2:
             # print(firstPlayerID)
-            ans=self.agents[firstPlayerID].chooseFirstActFromNet(roundId,self.env, act,selfAllAct)
+            ans=self.agents[firstPlayerID].chooseFirstActFromNet(roundId,self.env, act,selfAllAct,firstPlayerID)
         return ans
-    def otherPlayerPolicy(self,roundId,useSeq, act, nextID, firstKind, sortCardList2, cards):  # 使用的cards只能是单牌，对子，连对
+    def otherPlayerPolicy(self,roundId,useSeq, act, nextID, sortCardList2, cards):  # 使用的cards只能是单牌，对子，连对
         if len(cards) == 0:
             return None
         ansUp, ansDown, isHave = self.env.getAllAct(sortCardList2[nextID], self.env.players[nextID], cards)
         if self.args.trainlist[nextID]==2:
-            ans=self.agents[nextID].chooseOtherAct_fix(roundId,useSeq,self.env, act, ansUp, ansDown, firstKind, sortCardList2)
+            ans=self.agents[nextID].chooseOtherAct_fix(roundId,useSeq,self.env, act, ansUp, ansDown, sortCardList2)
         elif self.args.trainlist[nextID]<2:
             # print(nextID)
-            ans=self.agents[nextID].chooseOtherAct(roundId,useSeq,self.env, act, ansUp, ansDown, firstKind, sortCardList2)
+            ans=self.agents[nextID].chooseOtherAct(roundId,useSeq,self.env, act, ansUp, ansDown, sortCardList2)
         return ans
     def setReward(self,env,playerId,firstPlayerID, sc, isTer, info,seqCardReward):#设置奖励函数，在闲家视角的奖励
         reward = sc
         if isTer:
-            reward+=info['fen']
+            reward += info['fen']
             if env.players[firstPlayerID].isDealer():  #
                 reward = -reward
             if env.sumSc >= 80:
-                reward += (env.sumSc // 40 - 1) * 80
+                reward += (env.sumSc // 40 - 1) * 200
             elif env.sumSc > 0:
-                reward += (env.sumSc // 40 - 2) * 80
+                reward += (env.sumSc // 40 - 2) * 200
             else:
-                reward += -3 * 80
+                reward += -3 * 200
             reward += seqCardReward
         else:
             if env.players[firstPlayerID].isDealer():  #
                 reward = -reward
-            reward+=seqCardReward
-        reward=reward/50
-        if env.players[playerId].isDealer():
+            reward += seqCardReward
+        if env.players[playerId].isDealer():#如果自己是庄
             reward = -reward
+        reward = reward / 100
         return reward
     def setReward_Sparse(self,env,playerId,firstPlayerID, sc, isTer, info,seqCardReward):#系数奖励
         reward = sc
@@ -461,6 +570,11 @@ class DppoWorkers:
         return reward
     def playAGame(self):#玩一局游戏，同时要收集数据
         env=self.env
+        beginList = [39, 39, 23, 12, 26, 5, 53, 1, 38, 30, 46, 54, 48, 40, 36, 6, 28, 46, 26, 18, 7, 16, 2, 27, 5, 22,
+                     20, 47, 41, 41, 34, 8, 3, 31, 30, 13, 16, 23, 15, 48, 13, 51, 4, 37, 44, 33, 25, 52, 34, 9, 37, 21,
+                     3, 17, 50, 29, 24, 51, 49, 38, 35, 43, 24, 6, 18, 32, 22, 29, 7, 20, 11, 19, 15, 36, 14, 42, 27,
+                     45, 14, 12, 50, 45, 52, 31, 11, 42, 40, 47, 33, 54, 32, 8, 28, 21, 10, 49, 9, 25, 53, 44, 1, 4, 17,
+                     19, 10, 2, 35, 43]
         env.dealCards()
         # env.coldeck(baselineColdeck)  # 换底牌，baselineColdeck是最基本的换底牌策略
         env.coldeck(baselineColdeck)  # 换底牌，使用神经网络k
@@ -479,6 +593,7 @@ class DppoWorkers:
             for i in range(4):
                 sortCardList2[i] = env.players[i].toSortCardsList2(env)  # 会重叠
                 sortCardList1[i] = env.players[i].toSortCardsList1(sortCardList2[i], env)  # 去重
+            self.agents[firstPlayerID].initPar(roundId, firstPlayerID, -1, firstPlayerID)
             act[firstPlayerID] = self.firstPlayerPolicy(roundId,act,firstPlayerID,sortCardList1)  # 获取动作
             isSeq, canSeq = env.judgeSeqUse(act[firstPlayerID], firstPlayerID, sortCardList2)
             seqCardReward=0
@@ -500,13 +615,16 @@ class DppoWorkers:
             for i in range(1, 4):
                 nextID = (firstPlayerID + i) % 4
                 act[nextID] = Action()
+                self.agents[nextID].initPar(roundId,firstPlayerID, firstKind,nextID)
                 for a in act[firstPlayerID].one:
-                    li = self.otherPlayerPolicy(roundId,i, act, nextID, firstKind, sortCardList2, [a])
+                    li = self.otherPlayerPolicy(roundId,i, act, nextID, sortCardList2, [a])
                     act[nextID].add(li)
                 for dou in act[firstPlayerID].double:
-                    act[nextID].addDou(self.otherPlayerPolicy(roundId,i, act, nextID, firstKind, sortCardList2, dou))
+                    act[nextID].addDou(self.otherPlayerPolicy(roundId,i, act, nextID, sortCardList2, dou))
                 # act[nextID].println()
+            self.pushHistoryAction(roundId,getActionFeature(act,firstPlayerID,4))
             firstPlayerID, sc, isTer, info = env.game_step(act, firstPlayerID)
+
             # 评价谁赢，返回赢者id,本轮分数(双方都会得分)，isTer是游戏有木有结束,不论谁赢，info都会包含底牌分数乘以倍数
             for i in range(4):
                 self.agents[i].pushReward(roundId,self.rewardFun(env,i,firstPlayerID, sc, isTer, info,seqCardReward))
@@ -521,55 +639,89 @@ class DppoWorkers:
                 # print(winPlayer)
                 # print(playerId, "\n")
                 return roundId,playerId,winPlayer
-    def train_agent(self,  shared_model):
-        # try:  # 加载保存的参数
-        #     # print(shared_actor_model.state_dict())
-        #     if shared_model!=None:
-        #         for agent in self.agents:
-        #             agent.net.load_state_dict(shared_model.state_dict())
-        #     print("初始化完成", self.id)
-        # except ZeroDivisionError:  # 处理异常
-        #     print("共享参数异常")  # 输出错误原因
-        # print(self.env.ini_borad)
-        self.readAgentNet("mod/2023-03-24-11-01/")
-        print("begin train!!!")
+    def train_agent(self):
+        try:  # 加载保存的参数
+            # print(shared_actor_model.state_dict())
+            for i in range(4):
+                self.agents[i].shareParToself()
+            print("初始化完成", self.id)
+        except ZeroDivisionError:  # 处理异常
+            print("共享参数异常")  # 输出错误原因
+        print("begin train agent"+str(self.id))
 
-        pltDataLen=80
-        xList=[i for i in range(pltDataLen)]
-        yList=[0 for i in range(pltDataLen)]
+        pltDataLen=self.args.pltDataLen
+        saveDataLen = self.args.saveDataLen
+        intv = self.args.rewardInterval
+        pltDataMaxLen=10000
+        xList=[]
+        y1List=[]
+        y2List = []
         self.__trainCnt = 0
         self.env = CC()
         self.winPlayerSum=[0,0]#0是0和2赢，1是1和3赢。
+        self.playerGradeSum = [0, 0]
+
+        ma30=MACD(30)
+
+        nowTrainId=(self.trainlist[1]==1)
+        start_time = time.time()
+        self.epochid=0
         while True:
-            # randomPlayGame(env)
-            # while(True):
             self.env.reset_game()
-            self.winPlayerSum = [0, 0]  # 0是0和2赢，1是1和3赢。
+            winsum=[0,0]
             while(True):
                 roundUp,playerId,winPlayer = self.playAGame()#！=-1代表到A，本次游戏结束，返回赢得那个人。
+
                 for i in range(4):
-                    # self.agents[i].printMemory()
-                    if self.trainlist[i]==1:#如果这个智能体可以训练，就训练
-                        rewardList=self.agents[i].memoryReward
-                        self.agents[i].initLearn(roundUp,rewardList)
-                        for j in range(0,roundUp,1):
-                            self.agents[i].selflearn(j,roundUp,rewardList,self)
-                        # self.agents[i].selflearn(roundUp-1, roundUp, rewardList,self)
-                        # print(i)
+                    if self.trainlist[i]==1 :#如果这个智能体可以训练，就训练
+                        self.agents[i].initLearn(roundUp)
+                        self.agents[i].selflearn(roundUp,self.agents[i].memoryReward,self)
+                # self.epochid+=1
                 # break
                 self.winPlayerSum[winPlayer % 2] += 1
+                winsum[winPlayer % 2]+=1
+                self.playerGradeSum[0]+=self.env.getPlayNowGrade(0)
+                self.playerGradeSum[1]+=self.env.getPlayNowGrade(1)
                 if (playerId != -1):
                     # print("先到到A的是:" + str(playerId % 2) + "," + str(playerId % 2 + 2))
                     break
-            print("agent"+str(self.id)+" games " + str(self.__trainCnt) + " : "+str(self.winPlayerSum[0])+", "+str(self.winPlayerSum[1]))  # 谁赢了多少次
-            yList[self.__trainCnt%pltDataLen]=self.winPlayerSum[0]-self.winPlayerSum[1]
+            # s="worker "+str(self.id)+" Number of games "+str(self.__trainCnt)+" : "+str(winsum[0])+" "+str(winsum[1])
+            # print(s)#谁赢了多少次
+            # wInfo(s)
             self.__trainCnt += 1
-            # if self.__trainCnt%pltDataLen==0:
-            #     self.saveAgentNet()
-            #     print("save net "+str(self.__trainCnt))
-            # if self.__trainCnt%pltDataLen==0:
-            #     drawBrokenLine(xList,yList,self.args.picName)
-            #     print("draw pic")
-            # break
-#trainlist[i]=2代表固定策略，0代表初始神经网络，1代表训练的神经网络。
-#今天0324的任务：把分布式PPO用在拖拉机训练上
+            if self.id==0:
+                # print("Number of games " + str(self.__trainCnt) + " : ", self.winPlayerSum)  # 谁赢了多少次
+                s = "worker " + str(self.id) + " Number of games " + str(self.__trainCnt) + " : " + str(winsum[0]) + " " + str(winsum[1])
+                wInfo(s)
+                ma30.add(winsum[0] - winsum[1])
+                if nowTrainId==0 and ma30.getAvg() > 5 or nowTrainId==1 and ma30.getAvg() < -5:  # macd大于3
+                    self.trainlist[0],self.trainlist[1] =self.trainlist[1],self.trainlist[0]
+                    self.trainlist[2], self.trainlist[3] = self.trainlist[3], self.trainlist[2]
+                    nowTrainId = nowTrainId ^ 1  # 换人
+                    ma30 = MACD(30)
+                    print("swap training agent!!!",self.trainlist)
+                if self.__trainCnt % intv == 0:
+                    xList.append(self.__trainCnt // intv)
+                    y1List.append((self.winPlayerSum[0] - self.winPlayerSum[1]) / intv)
+                    y2List.append((self.playerGradeSum[0] - self.playerGradeSum[1]) / intv)
+                    self.winPlayerSum = [0, 0]  # 0是0和2赢，1是1和3赢。
+                    self.playerGradeSum = [0, 0]
+                if self.__trainCnt % saveDataLen == 0:
+                    self.saveAgentNet()
+                    print("save net " + self.savePath)
+                if self.__trainCnt % pltDataLen == 0:
+                    drawBrokenLine(xList, y1List, self.args.picName + "_win", "epoch",
+                                   "The difference between the number of rounds won by player 02 and player 13")
+                    drawBrokenLine(xList, y2List, self.args.picName + "_g", "epoch",
+                                   "Difference between player 02 and player 13 levels")
+                    end_time = time.time()
+                    print("draw pic " + self.args.picName + "_win.jpg")
+                    print("Program execution time: " + str(end_time - start_time))
+                    start_time = end_time
+                if self.__trainCnt % (pltDataMaxLen * intv) == 0:
+                    xList = []
+                    y1List = []
+                    y2List = []
+                    print("reset xlist!!")
+                # break
+

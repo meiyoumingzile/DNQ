@@ -3,51 +3,55 @@ import time
 from torch.autograd import Variable
 
 
-def chief_worker(num_workers, traffic_signal, critic_counter, actor_counter, critic_shared_model, actor_shared_model,
-                 critic_shared_grad_buffer, actor_shared_grad_buffer, critic_optimizer, actor_optimizer, shared_reward,
-                 shared_obs_state, update_step, name):
+def chief_worker(args,num_of_workers,graBuf_netList:list, graBuf_crinet, shared_netList:list, shared_crinet, counter:list, traffic_signal:list,shared_info,optimizerList):
     num_iteration = 1
+    # gloCounter=counter[4]
+    # gloTraffic_signal = traffic_signal[4]
     while True:
-        time.sleep(1)
-        # the chief will update the whole network when it receive the enough gradients..
-        if critic_counter.get() >= num_workers:
-            for n, p in critic_shared_model.named_parameters():
-                p.grad = Variable(critic_shared_grad_buffer.grads[n + '_grad'])
+        # time.sleep(0.5)
+        for i in range(4):
+            if args.trainlist[i]!=1:
+                continue
+            # print(counter[i].getBegin())
+            if counter[i].get() >= num_of_workers:
+                # num_iteration+=1
+                shared_crinet.zero_grad()
+                for n, p in shared_crinet.named_parameters():
+                    p.grad = graBuf_crinet.grads[n].cuda(args.cudaID0)
 
-            # start to update the critic network
-            critic_optimizer.step()
-            # clean the buffer....
-            critic_counter.reset()
-            critic_shared_grad_buffer.reset()
-            traffic_signal.switch()
+                # start to update the critic network
+                optimizerList[i][0].step()
+                # clean the buffer....
+                graBuf_crinet.reset()
 
-        # start to update the actor network...
-        if actor_counter.get() >= num_workers:
-            for n, p in actor_shared_model.named_parameters():
-                p.grad = Variable(actor_shared_grad_buffer.grads[n + '_grad'])
+                shared_netList[i].zero_grad()
+                k=i*2
+                for n, p in shared_netList[i].named_parameters():#更新act1
+                    p.grad = graBuf_netList[k].grads[n].cuda(args.cudaID0)
+                optimizerList[i][1].step()
+                graBuf_netList[k].reset()
 
-            # start to reset the buffer....
-            actor_optimizer.step()
 
-            # get the reward...
-            if num_iteration % update_step == 0:
-                reward_batch = shared_reward.get()
-                reward_batch /= num_workers
-                shared_reward.reset()
-                print('The iteration is ' + str(int(num_iteration / update_step)) + ' and the reward mean is ' + str(
-                    reward_batch))
+                shared_netList[i].zero_grad()
+                k = i * 2+1
+                for n, p in shared_netList[i].named_parameters():  # 更新act1
+                    p.grad = graBuf_netList[k].grads[n].cuda(args.cudaID0)
+                optimizerList[i][2].step()
+                graBuf_netList[k].reset()
 
-            if num_iteration % (update_step * 10) == 0:
-                save_path = 'saved_models/' + name + '/models_' + str(int(num_iteration / update_step)) + '.pt'
-                torch.save([actor_shared_model.state_dict(), shared_obs_state.get_results()], save_path)
 
-            num_iteration += 1
-            actor_counter.reset()
-            actor_shared_grad_buffer.reset()
-            traffic_signal.switch()
-x=torch.Tensor([[1., 2., 3.],
-        [3., 4., 5.]])
-xx=Variable(x)
-x.requires_grad_()
-print(x,x.requires_grad)
-print(xx,xx.requires_grad)
+                # get the reward...
+                # if num_iteration % update_step == 0:
+                #     reward_batch = shared_reward.get()
+                #     reward_batch /= num_workers
+                #     shared_reward.reset()
+                #     print('The iteration is ' + str(int(num_iteration / update_step)) + ' and the reward mean is ' + str(
+                #         reward_batch))
+                #
+                # if num_iteration % (update_step * 10) == 0:
+                #     save_path = 'saved_models/' + name + '/models_' + str(int(num_iteration / update_step)) + '.pt'
+                #     torch.save([actor_shared_model.state_dict(), shared_obs_state.get_results()], save_path)
+                # num_iteration += 1
+
+                counter[i].reset()
+                traffic_signal[i].switch()

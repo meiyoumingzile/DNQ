@@ -450,7 +450,8 @@ class CC():
                 break
             # print(sortCardList)
             li[2].sort(key=cmp_to_key(self._sortCardList_cmp2))
-    def _useCardsContainINF(self,roundId,p:Player, act:list, kind,fun,sortCardList=None):#sortCardList代表分好类的牌，这个牌也会跟着变
+    def _useCardsContainINF(self,roundId,p:Player, act:list, firstKind,fun,sortCardList=None):
+        # roundId是轮数，p是当前玩家，act是动作的卡牌列表，firstKind是首个玩家的出牌列表，fun选派策略，sortCardList代表分好类的牌，这个牌也会跟着变
         actlen=len(act)
         if actlen==0:
             return
@@ -465,7 +466,7 @@ class CC():
             return
         decInd = [0, 0, 0, 0, 0]
         for i in range(m,actlen):#寻找所有INF
-            k,j=fun(roundId,p,act[0:i], kind)#返回卡牌编号)
+            k,j=fun(roundId,p,act[0:i], firstKind)#返回卡牌编号)
             act[i]=p.cards_decorList[k][j]
             self.__delCard(p, j,k)
             decInd[k] += 1
@@ -1166,8 +1167,11 @@ class CC():
         print("当前闲家的分" + str(self.sumSc))
     def printUnderCards(self):  # act代表4个人每个人出的牌
         self.printCardsList(self.deck[-8:])
-
-
+    def getPlayNowGrade(self,playerId):
+        g=self.round_lordNum[playerId%2]
+        if g==1:
+            g=14
+        return g
 def randomUpdateINF(roundId,p:Player,act:list, kind):#随机选取动作，kind是第一个出牌的玩家的花色。返回种类和在cards_decorList中位置的编号
     actList=[]
     for j in range(p.cards_decorLen[kind]):#先看本花色有木有

@@ -145,7 +145,7 @@ class Agent(object):#智能体，蒙特卡洛策略梯度算法
         self.beginShape=beginShape
 
         self.learn_step_i = 0  # count the steps of learning process
-        self.optimizer=torch.optim.Adam(self.actor_net.parameters(), lr=α)
+        self.optimizer=[torch.optim.Adam(self.actor_net.parameters(), lr=α),torch.optim.Adam(self.critic_net.parameters(), lr=α)]
 
 
         self.memory_i = 0  # counter used for experience replay buffer//初始化记忆池
@@ -204,7 +204,7 @@ class Agent(object):#智能体，蒙特卡洛策略梯度算法
         # Gradient公式
         # 训练Actor
         # t=(self.memory_i-1+MEMORY_CAPACITY)%MEMORY_CAPACITY
-        t = np.random.choice(MEMORY_CAPACITY, 1)
+        t = np.random.choice(MEMORY_CAPACITY, 10)
         t[0]=(self.memory_i-1)%MEMORY_CAPACITY
         state = torch.FloatTensor(self.memoryQue[0][t]).unsqueeze(dim=0)  # state
         next_state = torch.FloatTensor(self.memoryQue[1][t]).unsqueeze(dim=0)
@@ -218,6 +218,10 @@ class Agent(object):#智能体，蒙特卡洛策略梯度算法
 
         v = (self.critic_net.forward(state,1), self.critic_net.forward(next_state,1))
         cri_loss = F.mse_loss(reward + γ * v[1], v[0])  # 用tderror的方差来算
+        self.optimizer[0].zero_grad()  # 0代表演员，1代表评论家
+        cri_loss.backward()
+        # print(cri_loss.shape,surr1.shape)
+        self.optimizer[0].step()
 
         delta = reward + γ * v[1]-v[0] #tderro也是优势函数,根据具体问题可以在is_ter==True时阻断
         # delta = delta.cpu().detach().numpy()
@@ -229,12 +233,12 @@ class Agent(object):#智能体，蒙特卡洛策略梯度算法
         # advantage_list.reverse()
         # # print(delta.shape,advantage_list.shape)
         # advantage = torch.Tensor(delta.detach()).cuda()
-        advantage = delta
+        advantage = delta.detach()
 
         # print(advantage.shape)
         nowRate = self.actor_net.forward(state,0)
 
-        print(probList.shape, nowRate.shape, act.shape, state.shape, next_state.shape)
+        # print(probList.shape, nowRate.shape, act.shape, state.shape, next_state.shape)
         for i in range(len(probList)):
             for j in range(len(probList[i])):
                 if probList[i][j]==0:
@@ -242,7 +246,7 @@ class Agent(object):#智能体，蒙特卡洛策略梯度算法
         nowRate=F.softmax(nowRate, dim=1)
         # print(nowRate, probList)
         # print(nowRate.shape)
-        print(nowRate.shape, probList.shape, act)
+        # print(nowRate.shape, probList.shape, act)
         nowRate = nowRate.gather(1, act)
         probList= probList.gather(1, act)
         # print(nowRate,probList)
@@ -255,10 +259,10 @@ class Agent(object):#智能体，蒙特卡洛策略梯度算法
         # self.optimizer.zero_grad()#0代表演员，1代表评论家
         # actor_loss.backward()
         # self.optimizer.step()
-        cri_loss=cri_loss+actor_loss
-        self.optimizer.zero_grad()  # 0代表演员，1代表评论家
-        cri_loss.backward()
-        self.optimizer.step()
+        self.optimizer[1].zero_grad()  # 0代表演员，1代表评论家
+        actor_loss.backward()
+        # print(cri_loss.shape,surr1.shape)
+        self.optimizer[1].step()
 
     def save(self):
         torch.save(self.actor_net, PATH+"mod/actor_net.pt")  #

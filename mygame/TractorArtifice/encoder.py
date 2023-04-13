@@ -2,7 +2,7 @@ import torch
 import tractor_game
 from tractor_game import Player,fenInd,getNum,Card,getDecor,Action,CC
 codeWide=55
-fen=[fenInd[i%13]/5 for i in range(0,55)]
+fen=[fenInd[i%13]/10 for i in range(0,55)]
 # print(fen)
 def handTo01code(p:Player):#handTo01code
     ans = torch.zeros((codeWide))
@@ -13,16 +13,17 @@ def handTo01code(p:Player):#handTo01code
                 ans[a-1]+=1
                 ans[54]+=fen[a]
     return ans
-def cardsTo01code(cadsList:list):
-    ans = torch.zeros((codeWide))
+def cardsTo01code(cadsList:list,playerId):
+    ans = torch.zeros((codeWide+4))
     for card in cadsList:
         a = int(card)
         if a>0:
             ans[a-1]+=1
             ans[54] += fen[a]
+    ans[codeWide+playerId] = 1
     return ans
-def actTo01code(act: Action):
-    ans = torch.zeros((codeWide))
+def actTo01code(act: Action,playerId):#playerId代表属于哪个人
+    ans = torch.zeros((codeWide+4))
     for a in act.one:
         if a > 0:
             ans[int(a)-1] += 1
@@ -32,6 +33,7 @@ def actTo01code(act: Action):
             if a > 0:
                 ans[int(a)-1] += 1
                 ans[54] += fen[int(a)]
+    ans[codeWide+playerId]=1
     return ans
 def lordNumFea(env: CC,useSeq,selfId,isDealer):#编码主牌花色和数字，以及自己出牌顺序.以及自己是否为庄家
     ans = torch.zeros((27))
@@ -68,14 +70,25 @@ def getBaseFea(env:CC,useSeq,selfId,isDealer,seeAllCards=True,seeUnder=True):#Ba
     underCards= torch.zeros((codeWide))
     if seeUnder:
         underCards=underCardsFea(env)
-    ans=torch.cat((x, tableCardFea(env), underCards, lordNumFea(env,useSeq,selfId,isDealer)), dim=0)
+    ans=torch.cat((x, underCards, lordNumFea(env,useSeq,selfId,isDealer)), dim=0)
+    ans = torch.cat((x, underCards, lordNumFea(env, useSeq, selfId, isDealer)), dim=0)
     return ans.unsqueeze(dim=0)
-def getActionFeature(actList:list):#动作列表
-    ans = torch.zeros((4,codeWide))
-    for i in range(4):
-        if isinstance(actList[i],Action):#类型是Action
-            ans[i]=actTo01code(actList[i])
+def getActionFeature(actList:list,firstPlayerId,layer=4):#动作列表
+    ans = torch.zeros((layer, codeWide + 4))
+    # print(firstPlayerId,actList)
+    for i in range(layer):
+        id = (firstPlayerId + i) % 4
+        if isinstance(actList[id], Action):  # 类型是Action
+            ans[i] = actTo01code(actList[id], id)
     return ans.unsqueeze(dim=0)
+def addActionFeature(ans,actList:list,firstPlayerId,tarId):#往动作向量里插入动作列表
+    # print(firstPlayerId,actList)
+
+    i=(tarId-firstPlayerId+4)%4
+    ad= cardsTo01code(actList, tarId)
+    ans[0][i] +=ad
+
+
 
 
 
