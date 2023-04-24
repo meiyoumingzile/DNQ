@@ -7,69 +7,65 @@ import numpy as np
 
 import torch
 from torch import nn
-mainfea=512
-def orthogonal_init(layer, gain=1.0):
-    for m in layer.modules():
-        if isinstance(m, nn.Linear):
-            nn.init.orthogonal_(m.weight, gain=gain)
-            nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.LSTM):
-            nn.init.orthogonal_(m.weight_ih_l0)
-            nn.init.orthogonal_(m.weight_hh_l0)
+from doudizhu_codeParameter import INFEA,mainfea,lstmfea,lstmInfea
+def par_init(layer, gain=1.0):
+    with torch.no_grad():
+        for m in layer.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.orthogonal_(m.weight, gain=gain)
+            elif isinstance(m, nn.LSTM):
+                nn.init.orthogonal_(m.weight_ih_l0)
+                nn.init.orthogonal_(m.weight_hh_l0)
+
 class ResBlock(nn.Module):#跳2层
     def __init__(self, in_channels, out_channels):
         super(ResBlock, self).__init__()
         self.fc=nn.Sequential(
             nn.Linear(in_channels, out_channels),
-            nn.LayerNorm(out_channels),
             nn.ReLU(),
             nn.Linear(out_channels, out_channels),
         )
-        self.fc1=nn.Linear(out_channels, out_channels)
-        self.tanh= nn.ReLU()
-        orthogonal_init(self.fc)
-        orthogonal_init(self.fc1)
+        # self.fc1=nn.Linear(out_channels, out_channels)
+        par_init(self.fc)
+        # par_init(self.fc1)
     def forward(self, x):
         identity = x
         out = self.fc(x)
         out += identity
-        out =self.tanh(out)
-        out1= self.fc1(out)
-        out1 += identity
-        out1 += out
-        out1 = self.tanh(out1)
-        return out1
+        return out
 class AgentCriNet(nn.Module):#
-    def __init__(self,in_fea=330):#330
+    def __init__(self,in_fea):#330
         super().__init__()
-        self.lstm1 = nn.LSTM(input_size=57, hidden_size=128,num_layers=2,  batch_first=True)#本LSTM接受出牌的动作序列，可能只有1，也可能很多。
-        self.mlp_base = nn.Sequential(  # 求动作
-            nn.Linear(in_fea+128, mainfea),
-            nn.ReLU(),
-            # ResBlock(mainfea,mainfea),
-            nn.Linear(mainfea, mainfea),
-            nn.ReLU(),
-            nn.Linear(mainfea, mainfea),
-            nn.ReLU(),
-            nn.Linear(mainfea, mainfea),
-            nn.ReLU(),
-            nn.Linear(mainfea, mainfea),
-            nn.ReLU(),
-            # ResBlock(512,512),
-            nn.Linear(mainfea, 1),
-        )
-        # orthogonal_init(self.lstm1)
-        # orthogonal_init(self.lstm2)
-        orthogonal_init(self.mlp_base)
+        self.lstm1 = nn.LSTM(input_size=lstmInfea, hidden_size=lstmfea,num_layers=1,  batch_first=True)#本LSTM接受出牌的动作序列，可能只有1，也可能很多。
 
-    def forward(self, baseFea,hisActFea):  # 估计q，x是forward_base的结果
+        self.mlp_base = nn.Sequential(  # 求动作
+            nn.Linear(in_fea+lstmfea, mainfea),
+            # nn.LayerNorm(mainfea),
+            nn.Linear(mainfea, mainfea),
+            nn.LayerNorm(mainfea),
+            nn.ReLU(),
+            nn.Linear(mainfea, mainfea),
+            nn.ReLU(),
+            nn.Linear(mainfea, mainfea),
+            nn.LayerNorm(mainfea),
+            nn.ReLU(),
+        )
+        self.fc=nn.Linear(mainfea, 1)
+        # par_init(self.lstm1)
+        par_init(self.fc)
+        par_init(self.mlp_base)
+
+    def forward_base(self, baseFea,hisActFea):  # 估计q，x是forward_base的结果
         x1, (hc1, hn) = self.lstm1(hisActFea)
         x1=x1[:,-1,:]
         # print(hc.shape,baseFea.shape)
         x = torch.cat((baseFea, x1), dim=1)
         x = self.mlp_base(x)
         return x
-
+    def forward(self, baseFea,hisActFea):  # 估计q，x是forward_base的结果
+        x = self.forward_base(baseFea,hisActFea)
+        x=self.fc(x)
+        return x
     def printGrad(self):
         print("criticNetGrad:")
         i=0
@@ -78,57 +74,83 @@ class AgentCriNet(nn.Module):#
                 print("mlp_base:" + str(i), end=" ")
                 i += 1
                 print(m.weight.grad)
-class AgentNet(nn.Module):#
-    def __init__(self,in_fea=330):#330
+class PredictionNet(nn.Module):#预测牌的网络
+    def __init__(self,in_fea):
         super().__init__()
-        self.lstm1 = nn.LSTM(input_size=57, hidden_size=128, num_layers=2,batch_first=True)
-        self.mlp_base = nn.Sequential(  # 求动作
-            nn.Linear(in_fea+128, mainfea),
+        self.lstm1 = nn.LSTM(input_size=lstmInfea, hidden_size=lstmfea, num_layers=1, batch_first=True)
+        self.mlp= nn.Sequential(#一个监督学习网络，预测下一个人手里有某张牌的概率
+            nn.Linear(in_fea, mainfea),
             nn.ReLU(),
             nn.Linear(mainfea, mainfea),
             nn.ReLU(),
             nn.Linear(mainfea, mainfea),
             nn.ReLU(),
-            nn.Linear(mainfea, mainfea),
-            nn.ReLU(),
-            nn.Linear(mainfea, mainfea),
-            nn.ReLU(),
-            nn.Linear(mainfea, mainfea),
-            nn.ReLU(),
-            # nn.Linear(mainfea, mainfea),
-            # nn.ReLU(),
+            nn.Linear(mainfea, 54),
+            nn.Sigmoid()
         )
+        par_init(self.mlp)
+    def forward(self,baseFea,hisActFea):#估计q，x是forward_base的结果
+        x1, (hc1, hn) = self.lstm1(hisActFea)
+        x1 = x1[:, -1, :]
+        x = torch.cat((baseFea, x1), dim=1)
+        x = self.mlp(x)
+        return x
+class AgentNet(nn.Module):#
+    def __init__(self,in_fea):#330
+        super().__init__()
+        self.lstm1 = nn.LSTM(input_size=lstmInfea, hidden_size=lstmfea, num_layers=1,batch_first=True)
+        self.lstm2 = nn.LSTM(input_size=lstmInfea, hidden_size=lstmfea, num_layers=1, batch_first=True)
+        self.preNet=PredictionNet(in_fea)
+        self.mlp_base = nn.Sequential()
         self.mlp_act1 = nn.Sequential(  # 求出哪类，是actor网络
+            nn.Linear(in_fea + lstmfea, mainfea),
+            # nn.LayerNorm(mainfea),
+            nn.ReLU(),
+            nn.Linear(mainfea, mainfea),
+            nn.LayerNorm(mainfea),
+            nn.ReLU(),
+            nn.Linear(mainfea, mainfea),
+            nn.ReLU(),
+            nn.Linear(mainfea, mainfea),
+            nn.LayerNorm(mainfea),
+            nn.ReLU(),
             nn.Linear(mainfea, 13),
         )
         self.mlp_act2 = nn.Sequential(  # 求动作平分,是actor网络
-            nn.Linear(mainfea+57, mainfea),#512是base网络的输出，128是单张牌之间lstm的输出
+            nn.Linear(in_fea + lstmfea+57+14, mainfea),
             nn.ReLU(),
-            nn.Linear(mainfea, 1),  # 512是base网络的输出，128是单张牌之间lstm的输
+            nn.Linear(mainfea, mainfea),
+            nn.LayerNorm(mainfea),
+            nn.ReLU(),
+            nn.Linear(mainfea, mainfea),
+            nn.ReLU(),
+            nn.Linear(mainfea, mainfea),
+            nn.LayerNorm(mainfea),
+            nn.ReLU(),
+            nn.Linear(mainfea, 1),#512是base网络的输出，128是单张牌之间lstm的输出
             # nn.Sigmoid(),
         )
-        # orthogonal_init(self.lstm1)
-        # orthogonal_init(self.lstm2)
-        orthogonal_init(self.mlp_base)
-        orthogonal_init(self.mlp_act1)
-        orthogonal_init(self.mlp_act2)
+        # par_init(self.lstm1)
+        # par_init(self.lstm2)
+        par_init(self.mlp_base)
+        par_init(self.mlp_act1)
+        par_init(self.mlp_act2)
     def forward_base(self, baseFea,hisActFea):
-        # seeingCards,handCards,underCards,epochCards：每个玩家已经出的牌，自己手牌,庄家扣的底牌,本轮其他玩家出的牌,分数
-        # epochCards = epochCards.view(epochCards.size(0), -1).unsqueeze(dim=0)
-        # print(baseFea.shape)
+
         x1, (hc1, hn) = self.lstm1(hisActFea)
         x1=x1[:,-1,:]
-        # print(x1.shape,x2.shape,hc1[1].shape)
-        # hc2 = hc2.view(-1)
-        # hc2 = hc2.squeeze(dim=0)
-        # print(hc2.shape)
-        # print(hc.shape,baseFea.shape)
+
         x = torch.cat((baseFea, x1), dim=1)
         x = self.mlp_base(x)
         # print(x.shape)
         return x
     def forward_fp(self,baseFea,hisActFea):#二分类,x是forward_base的结果
-        x = self.forward_base(baseFea,hisActFea)
+        # x = self.forward_base(baseFea,hisActFea)
+        # print(baseFea.shape)
+        x1, (hc1, hn) = self.lstm1(hisActFea)
+        x1 = x1[:, -1, :]
+        x = torch.cat((baseFea, x1), dim=1)
+        # x = self.mlp_base(x)
         x=self.mlp_act1(x)
         return x
 
@@ -140,12 +162,15 @@ class AgentNet(nn.Module):#
         batch_size=actFea.shape[0]
         baseFea=baseFea.repeat(batch_size, 1)
         hisActFea = hisActFea.repeat(batch_size, 1,1)
-        x = self.forward_base(baseFea, hisActFea)
-        x=torch.cat((x,actFea),dim=1)
+        x1, (hc1, hn) = self.lstm2(hisActFea)
+        x1 = x1[:, -1, :]
+        x = torch.cat((baseFea, x1,actFea), dim=1)
         x = self.mlp_act2(x)
+        # print(x)
         x=F.softmax(x, dim=0)
         return x
-
+    def forward_pre(self, baseFea,hisActFea):
+        return self.preNet.forward(baseFea,hisActFea)
     def printGrad(self):
         print("actorNetGrad:")
         i=0
@@ -166,35 +191,31 @@ class AgentNet(nn.Module):#
                 print("mlp_act2:" + str(i), end=" ")
                 i += 1
                 print(m.weight.grad)
-class PredictionNet(nn.Module):#预测牌的网络
-    def __init__(self,in_fea):
+class BidNet(nn.Module):#
+    def __init__(self):#330
         super().__init__()
-        self.mlp_ambush_q= nn.Sequential(
-            nn.Linear(in_fea, 512),#512是base网络的输出，128是单张牌之间lstm的输出
+        self.mlp = nn.Sequential(  #叫分网络,它连接critic网络
+            nn.Linear(mainfea, mainfea),
+            # nn.LayerNorm(mainfea),
             nn.ReLU(),
-            nn.Linear(512, 1),
+            nn.Linear(mainfea, 4),
         )
-        self.mlp_ambush_action =  nn.Sequential(
-            nn.Linear(in_fea, 512),#512是base网络的输出，128是单张牌之间lstm的输出
-            nn.ReLU(),
-            nn.Linear(512, 1),
-        )
-    def forward_act(self,x,act):# actor网络，x是forward_base的结果
-        x = torch.cat((x, act), dim=1)
-        x = self.mlp_ambush_action(x)
-        return x
-    def forward_q(self,x,act):#估计q，x是forward_base的结果
-        x = torch.cat((x, act), dim=1)
-        x = self.mlp_ambush_q(x)
-        return x
+    def forward(self,x):
+        x=self.mlp(x)
 
+        return x
 # net=AgentNet()
-# x1,x2,x3=torch.ones((1,330)),torch.ones((1,1,57)),torch.ones((7,57))
-# x=net.forward_act(x1,x2,x3)
-# # x=net.forward_fp(x1,x2).squeeze(dim=0)
-# # x=net.forward_fp(x1,x2,)
-# # x=torch.Tensor([[0.0000, 0.0000, 0.0750, 0.0735, 0.1493, 0.1012, 0.0299, 0.1016, 0.1648,
-# #          0.1170, 0.0412, 0.1464, 0.0000]])
+# lstm=nn.LSTM(input_size=57, hidden_size=lstmfea, num_layers=1, batch_first=True)
+# x=torch.ones((0,57))
+# x,_,_=lstm(torch.Tensor([[]]))·
+# print(x.shape)
 # print(x,x.shape)
 # actid=torch.Tensor([[2]]).long()
 # print(x.gather(0,actid))
+# x=torch.Tensor([5,0,3,3,3])
+# # x=maxMinNor(x)
+# # print(x)
+# x=F.softmax(x, dim=0)
+# x=torch.zeros((2,55))
+# x=torch.cat((torch.zeros(((2,55))),x),dim=0)
+# print(x.shape)

@@ -1,5 +1,6 @@
 import datetime
 import os
+import random
 from collections import deque
 
 import matplotlib
@@ -23,7 +24,7 @@ def wInfo(s,f="info.txt"):
         f.write(s + "\n")
 
 class MACD:
-    def __init__(self,k,maxLen=10000):
+    def __init__(self,k,maxLen=1000):
         self.que=deque()
         self.sumQue=deque(maxlen=maxLen)
         self.sum=0
@@ -36,6 +37,8 @@ class MACD:
         self.sumQue.append(self.sum/self.k)
     def getAvg(self):
         return self.sum / self.k
+    def len(self):
+        return len(self.que)
 class TrafficLight:
     def __init__(self):
         self.val = mp.Value("b", False)
@@ -176,7 +179,6 @@ class RunningMeanStd:
             self.S = self.S + (x - old_mean) * (x - self.mean)
             self.std = np.sqrt(self.S / self.n )
 
-
 def binary_conversion(var: int):
     """
     二进制单位转换
@@ -197,7 +199,11 @@ def getNowTimePath():
     now = now.replace(":", "-")
     path = "mod/" + now + "/"
     return path
-
+def getNowTime():
+    now = datetime.datetime.now()
+    now = str(now.strftime("%Y-%m-%d-%H:%M"))
+    now = now.replace(":", "-")
+    return now
 def getMacdList(yList,k=5):
     sum = 0
     n=len(yList)
@@ -212,7 +218,7 @@ def drawMacd(xList,yList,k,color):
     if len(yList)>=k:
         ma5=getMacdList(yList,k)
         plt.plot(xList[k:], ma5,color=color,label="ma"+str(k))
-def drawBrokenLine(xList,yList,name="aaa",xLabel="",yLabel="",isClear=True):
+def drawBrokenLine(xList,yList,pointList,name="aaa",xLabel="",yLabel="",isClear=True):
     plt.figure(figsize=(20, 10), dpi=100)
 # game = ['1-G1', '1-G2', '1-G3', '1-G4', '1-G5', '2-G1', '2-G2', '2-G3', '2-G4', '2-G5', '3-G1', '3-G2', '3-G3',
 #         '3-G4', '3-G5', '452G1', '4554-G2', '54G3', '54-G4', '54G5', '54-G6']
@@ -224,8 +230,11 @@ def drawBrokenLine(xList,yList,name="aaa",xLabel="",yLabel="",isClear=True):
                ncol=3, shadow=True,fancybox=True)
     plt.xlabel(xLabel)
     plt.ylabel(yLabel)
-    plt.savefig(name+".jpg")
+    if pointList !=None:
+        for a in pointList:
+            plt.scatter(a[0], a[1],s=np.pi * (7)**2, c="red")
+    plt.savefig("res/"+name+".jpg")
     if isClear:
         plt.clf()
-
+# drawBrokenLine(xList=[i%30 for i in range(100)],yList=[i%30 for i in range(100)],pointList=[(50,50),(30,20)])
 # print(getNowTimePath())

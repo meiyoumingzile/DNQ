@@ -1,9 +1,18 @@
-
+import os
 
 import torch
 import numpy as np
 from torch import nn
-model_path="baselines/put_pretrained_models_here"
+import onnx
+import onnxruntime as ort
+from onnx import helper
+import google.protobuf as pb
+from google.protobuf import text_format
+
+import baseline.perfectdou_encoder as perfectdou_encoder
+import baseline.douzero_encoder as douzero_encoder
+import baseline.douzeroresnet_encoder as douzeroresnet_encoder
+
 
 class LandlordLstmModel(nn.Module):
     def __init__(self):
@@ -74,25 +83,49 @@ class FarmerLstmModel(nn.Module):
             else:
                 action = torch.argmax(x,dim=0)[0]
             return dict(action=action)
+def getModel(kind,cudaId):
+    models=None
+    if kind=="douzero":
+        models=[douzero_encoder.load_model("landlord","baseline/douzero/douzero_ADP/landlord.ckpt", cudaId),
+                douzero_encoder.load_model("landlord_down","baseline/douzero/douzero_ADP/landlord_down.ckpt", cudaId),
+                douzero_encoder.load_model("landlord_up","baseline/douzero/douzero_ADP/landlord_up.ckpt", cudaId),
+        ]
+    elif kind == "douzeroresnet":
+        models = [douzeroresnet_encoder.load_model("landlord", "baseline/douzero/douzero_resnet/resnet_landlord.ckpt", cudaId),
+                  douzeroresnet_encoder.load_model("landlord_down", "baseline/douzero/douzero_resnet/resnet_landlord_down.ckpt",
+                                              cudaId),
+                  douzeroresnet_encoder.load_model("landlord_up", "baseline/douzero/douzero_resnet/resnet_landlord_up.ckpt", cudaId),
+                  ]
+    elif kind=="perfectdou":
+        models = [perfectdou_encoder.load_model("landlord", "baseline/perfectdou/landlord.onnx",cudaId),
+                  perfectdou_encoder.load_model("landlord_down","baseline/perfectdou/landlord_down.onnx",cudaId),
+                  perfectdou_encoder.load_model("landlord_up","baseline/perfectdou/landlord_up.onnx", cudaId),
+                  ]
+    return models
 
-# Model dict is only used in evaluation but not training
-model_dict = {}
-model_dict['landlord'] = LandlordLstmModel
-model_dict['landlord_up'] = FarmerLstmModel
-model_dict['landlord_down'] = FarmerLstmModel
-def _load_model(position, model_path):
-    model = model_dict[position]()
-    model_state_dict = model.state_dict()
-    if torch.cuda.is_available():
-        pretrained = torch.load(model_path, map_location='cuda:0')
-    else:
-        pretrained = torch.load(model_path, map_location='cpu')
-    pretrained = {k: v for k, v in pretrained.items() if k in model_state_dict}
-    model_state_dict.update(pretrained)
-    model.load_state_dict(model_state_dict)
-    if torch.cuda.is_available():
-        model.cuda()
-    model.eval()
-    return model
-pretrained = _load_model("landlord",model_path)
-print(pretrained)
+# from baseline.perfectdou.env.encode import (
+#     encode_obs_landlord,
+#     encode_obs_peasant,
+#     _decode_action,
+# )
+# def act(model,obs):
+#     input_name = model.get_inputs()[0].name
+#     input_data = np.concatenate(
+#         [obs["x_no_action"].flatten(), obs["legal_actions_arr"].flatten()]
+#     ).reshape(1, -1)
+#     logit = model.run(["action_logit"], {input_name: input_data})
+#     action_id = np.argmax(logit)
+#     action = _decode_action(action_id, obs["current_hand"], obs["actions"])
+#     return action
+
+# from DNQ.mygame.douDiZhu.doudizhu_game import Doudizhu, Action
+# from DNQ.mygame.douDiZhu.doudizhu_cheat import setHandCards
+# env=Doudizhu()
+# env.reset()
+# env.dealCards(None,0)
+# setHandCards(env.players[0],["大王","小王","10","J","J","J","2","A"])
+# allActLists=env.players[0].getAllFirstAction(all=True)
+# model = getModel("perfectdou",0)
+# a=act(model[0],perfectdou_encoder.toObs(0,perfectdou_encoder.Infoset(env,0,allActLists)))
+# id,act=perfectdou_encoder.strToMyAction(a,allActLists)
+# print(id,act)

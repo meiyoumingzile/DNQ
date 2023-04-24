@@ -32,6 +32,7 @@ class DeepAgent:
 
         z_batch = torch.from_numpy(obs['z_batch']).float()
         x_batch = torch.from_numpy(obs['x_batch']).float()
+        # print("大小",z_batch.shape,x_batch.shape)
         if torch.cuda.is_available():
             z_batch, x_batch = z_batch.cuda(), x_batch.cuda()
         y_pred = self.model.forward(z_batch, x_batch, return_value=True)['values']
