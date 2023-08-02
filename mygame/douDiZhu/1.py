@@ -1,30 +1,52 @@
-def chooseActFromNet(self, roundId, env, maxAgent, preActQue, allActionList: list):  # ansUp代表较大的动作，ansDown代表较小的动作
-    # return self.chooseActFromNet_withDiv(roundId,env,maxAgent,preActQue,allActionList)
-    baseFea = getBaseFea(env, self.player.id, preActQue).cuda(self.worker.cudaID)  # self.id
-    allAct_kind = env.classActKind(allActionList)
+import time
 
-    # print(self.worker.cudaID,next(self.net.parameters()).device)
-    hisActFea = self.hisActTensor
-    probList1 = self.net.forward_fp(baseFea, hisActFea).squeeze(dim=0)  # base的特征向量
-    for i in range(len(allAct_kind)):
-        if len(allAct_kind[i]) == 0:
-            probList1[i] = -math.inf
-    mask = (probList1 != -math.inf)
-    probList1 = torch.softmax(probList1, dim=0)
+import torch
+from torch import nn
 
-    actid_1, probList1 = self.epslBoltzmann(probList1, mask, self.worker.actepsl)
-    actid_1_prob = probList1[actid_1].item()
 
-    if len(allAct_kind[actid_1]) <= 1:
-        actid_2 = 0
-        actid_2_prob = 1
+def epslBoltzmann(self, probList, mask, epsl=0.2):  # 修正玻尔兹曼,这里epsl是随机选取的概率
+    # print(torch.isnan(probList))
+    if torch.any(torch.isnan(probList)):
+        print(probList, mask)
+        print("have nan")
+        exit()
+    if mask != None:
+        cnt = mask.sum().item()
+        p = epsl / cnt
+        ans = probList * (1 - epsl) + p
+        for i in range(probList.shape[0]):
+            if mask[i] == 0:
+                ans[i] = 0
     else:
-        allActFea = getAllActionFea(self.env, allAct_kind[actid_1]).cuda(self.worker.cudaID)
-        probList2 = self.net.forward_act(baseFea, hisActFea, allActFea).squeeze(dim=1)
-        actid_2, probList2 = self.epslBoltzmann(probList2, None, self.worker.actepsl)
-        actid_2_prob = probList2[actid_2].item()
-    act = allAct_kind[actid_1][actid_2]
-    self.pushMemory(roundId, mask, allAct_kind[actid_1], baseFea, hisActFea, 0, (actid_1, actid_1_prob),
-                    (actid_2, actid_2_prob))
-    self.player.useAction(act, self.updateINF)
-    return act
+        cnt = probList.shape[0]
+        # if cnt<1:
+        #     print(probList,mask,probList.shape)
+        p = epsl / cnt
+        ans = probList * (1 - epsl) + p
+    actid = torch.multinomial(ans, num_samples=1, replacement=True)[0].item()
+    return actid, ans
+class shuffleNet(nn.Module):#
+    def __init__(self):#330
+        super().__init__()
+        self.tran =  nn.Transformer(
+            d_model=57,
+            nhead=3,
+            num_encoder_layers=2,
+            num_decoder_layers=2,
+            dim_feedforward=57,
+            batch_first=True,
+            dropout=0.1)
+        self.lstm1 = nn.LSTM(input_size=57, hidden_size=128, num_layers=1, batch_first=True)
+    def forward(self,x):
+        start_time0 = time.time()
+        z=self.tran(x,x)
+        start_time1 = time.time()
+        y,(h0,c0)=self.lstm1(x)
+        start_time2 = time.time()
+        print(start_time2-start_time1,start_time1-start_time0)
+        return z
+
+net=shuffleNet()
+x=torch.ones((1,111,57))
+net.forward(x)
+print(x.shape)

@@ -1,6 +1,6 @@
 import torch
 import doudizhu_game
-from doudizhu_game import Player,getNum,Card,getDecor,Action,Doudizhu
+from doudizhu_game import Player,getNum,Card,getDecor,Action,Doudizhu,orderToNum
 
 codeWide=54
 def getBelongFea(p:Player):#1代表地主
@@ -27,7 +27,7 @@ def handToCnt(p:Player):#handTo01code,得到玩家剩余手牌的向量
     sumcards=len(p.cards)+len(p.uncards)
     return torch.Tensor([len(p.cards)/sumcards,len(p.uncards)/sumcards])#返回手里已有的牌的数量，剩余的牌的数量
 def handTo01code_not(p:Player):#handTo01code,得到不可见的玩家的手牌向量
-    ans = torch.zeros((codeWide+15))
+    ans = torch.zeros((codeWide+14))
     belong = getBelongFea(p)
     return torch.cat((ans,belong), dim=0)
 def cardsTo01code(cards,haveBomb=True):#
@@ -101,7 +101,8 @@ def getBaseFea(env:Doudizhu,selfId,preActQue,otherCards=None,kind=0):#BaseFea代
         otherCardsFea = torch.zeros((codeWide))
     else:
         otherCardsFea=cardsTo01code(otherCards,False)
-    ans=torch.cat((x_have,x_left,que1,que2,otherCardsFea, underCards,x_cnt), dim=0)
+    scList=torch.log2(torch.Tensor(env.scList))/10
+    ans=torch.cat((x_have,x_left,que1,que2,otherCardsFea, underCards,x_cnt,scList), dim=0)
     return ans.unsqueeze(dim=0)
 
 def getOtherProbFea(env,selfId,beginCardsFea,prob):#计算其余两个人的概率。beginCardsFea是selfId的初始手牌，prob是神经网络预测概率
@@ -172,7 +173,57 @@ def getAllActionKindFea(env:Doudizhu,allAct_kind:list):#得到全部动作的向
 # tensor = x.repeat(100, 1, 1)
 # print(tensor)
 
+def __cardsToGraph_seq(ans,l,r):
+    for j in range(l, r):
+        for k in range(l, r):
+            ans[orderToNum[j] - 1][orderToNum[k] - 1] += 1
+def cardsToGraph(env,cards):#
+    ans = torch.zeros((15,15))
+    cnt = [0]*15
+    for card in cards:
+        a = getNum(card)
+        cnt[a - 1] += 1
+    for i in range(0, 15):
+        ans[i][i] = cnt[i]
 
+    for i in range(0, 15):
+        if cnt[i]==3:
+            for j in range(15):
+                if cnt[i]>0:
+                    ans[i][j]+=1
+        if cnt[i]==4:
+            for j in range(15):
+                if cnt[i]>0:
+                    ans[i][j]+=1
+    seq1 =i= 0
+    for i in range(1, 13):  # 顺子
+        num=orderToNum[i] - 1
+        if cnt[num] > 0:
+            seq1 += 1
+        else:
+            if seq1>=5:
+                __cardsToGraph_seq(ans,i - seq1 + 1, i + 1)
+            seq1 = 0
+    if seq1 >= 5:
+        __cardsToGraph_seq(ans,i - seq1 + 1, i + 1)
 
+    seq1 =i= 0
+    for i in range(1, 13):  # 顺子
+        num=orderToNum[i] - 1
+        if cnt[num] > 1:
+            seq1 += 1
+        else:
+            if seq1>=3:
+                __cardsToGraph_seq(ans,i - seq1 + 1, i + 1)
+            seq1 = 0
+    if seq1 >=3:
+        __cardsToGraph_seq(ans,i - seq1 + 1, i + 1)
+
+    # print(edgeList)
+    # print(edgeList1, edgeList2)
+    if cnt[13]>0 and cnt[14]>0:
+        ans[13][14] += 1
+        ans[14][13] += 1
+    return ans
 
 

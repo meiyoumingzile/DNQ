@@ -1,11 +1,9 @@
 import random
 import numpy as np
-import tractor_game
+from DNQ.mygame.TractorArtifice.game_env import tractor_game
 from tractor_network import AgentNet
-from encoder import getBaseFea,getActionFeature
-from cheater import mkDeck, cheator1
-from tractor_game import Action,randomUpdateINF
-from baselinePolicy import baselineColdeck
+from DNQ.mygame.TractorArtifice.game_env.tractor_game import Action,randomUpdateINF
+from DNQ.mygame.TractorArtifice.game_env.baselinePolicy import baselineColdeck
 
 def firstPlayerPolicy(selfAllAct):#第一个人的出牌策略
     maxLen = 0

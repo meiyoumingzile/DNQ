@@ -53,6 +53,22 @@ def setHandCards(p:Player,li):#["Q","K","10","J","9","小王","大王","A", "A",
     for i in range(len(li)):
         li[i]=numToCardId_decorList(li[i],decorList)
     p.cards=li.copy()
+def setAllPlayerHandCards(players,li):#自定义玩家手牌，如：env.players,[["A", "A"],["大王", "3"],["4", "4"]]
+    decorList=[[0,1,2,3] for i in range(13)]
+    deck=[i+1 for i in range(54)]
+    cnt=[0,0,0]
+    for j in range(3):
+        for i in range(len(li[j])):
+            li[j][i]=numToCardId_decorList(li[j][i],decorList)
+            deck.remove(li[j][i])
+        players[j].cards=li[j].copy()
+        cnt[j] = 51 // 3 + (players[j].dealerTag == 0) * 3-len(li[j])
+    deck_i=0
+    for j in range(3):
+        uncards=deck[deck_i:deck_i+cnt[j]]
+        deck_i+=cnt[j]
+        players[j].uncards=uncards.copy()
+        players[j].beginCards=uncards.copy()+players[j].cards.copy()
 def cheat1():#自定义作弊器
     setDealer=0
     dir=[[],[],[],[]]

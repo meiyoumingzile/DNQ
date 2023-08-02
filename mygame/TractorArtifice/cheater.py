@@ -1,6 +1,6 @@
 import numpy as np
 
-from DNQ.mygame.TractorArtifice.tractor_game import CARDS_CNT, decorName, stringToCardId, CARDS_CNT2, getKind, Card, \
+from DNQ.mygame.TractorArtifice.game_env.tractor_game import CARDS_CNT, decorName, stringToCardId, CARDS_CNT2, getKind, Card, \
     NameTodecorId, INF, UNDERCARD_CNT
 
 def __mkdeck_push(deck1,i,yu,pid,without,setDecor, setNum):

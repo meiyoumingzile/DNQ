@@ -4,11 +4,11 @@ import torch
 from doudizhu_game import Doudizhu, getNum,Action,cardIdListlistToNum
 import onnx
 import onnxruntime as ort
-# from baseline.perfectdou.env.encode import (#python3.7才能用，3.8就不行
-#     encode_obs_landlord,
-#     encode_obs_peasant,
-#     _decode_action,
-# )
+from baseline.perfectdou.env.encode import (#python3.7才能用，3.8就不行
+    encode_obs_landlord,
+    encode_obs_peasant,
+    _decode_action,
+)
 
 myCardToEnvCard = {3: 3, 4: 4, 5: 5, 6: 6, 7: 7,
                     8: 8, 9: 9, 10: 10, 11: 11, 12: 12,
@@ -104,6 +104,7 @@ def strToMyAction(cards_str:str,allActionList):
     for i in range(len(cards)):
         cards[i]=cardnameTomyCard[cards[i]]
     cards.sort()
+    # print(cards)
     for i in range(len(allActionList)):
         act=allActionList[i]
         li=act.tolist()

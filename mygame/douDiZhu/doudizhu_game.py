@@ -35,16 +35,26 @@ def getDecorAndNum(id):
     return int(decor),int(num)
 def toIndex(decor,num):
     return num+decor*13
-def cardToString(id,up=False):#
+def cardToString(id,i=-1,up=False):#
     decor, num = getDecorAndNum(id)
-    if id == INF:
-        return "<任意>"
-    elif num == 0:
-        return "<null>"
-    elif decor == 4:
-        return "<"+ (num == 1 and "小" or "大") + "王>"
+    if i==-1:
+        if id == INF:
+            return "<任意>"
+        elif num == 0:
+            return "<null>"
+        elif decor == 4:
+            return "<"+ (num == 1 and "小" or "大") + "王>"
+        else:
+            return "<" + decorName[decor] + numName[num] + ">"
     else:
-        return "<" + decorName[decor] + numName[num] + ">"
+        if id == INF:
+            return "<i:{} ".format(i) + "任意 >"
+        elif num == 0:
+            return "<i:{} ".format(i)+ "null >"
+        elif decor == 4:
+            return "<i:{} ".format(i)+(num==1 and "小"or"大") + "王>"
+        else:
+            return "<i:{} ".format(i)+decorName[decor]+numName[num]+">"
 stringToCardId={}
 def init():
     for i in range(len(actKindList)):
@@ -67,6 +77,7 @@ def init():
     cardOrder[54] = 15
     orderToNum[cardOrder[54]] = 15
 init()
+# print(orderToNum)
 MAXNUM=16
 MAXORDER=16
 # print(cardOrder)
@@ -154,7 +165,7 @@ class Action():
             ans+=self.appendix.copy()
         return ans
     def print(self,i=0):
-        print("act"+str(i)+":",end="")
+        print("player:"+str(self.playerId)+" act"+str(i)+":",end="")
         i=0
         for a in self.cards:
             Card(a).print(i)
@@ -162,6 +173,9 @@ class Action():
         for a in self.appendix:
             Card(a).print(i)
             i+=1
+    def println(self,i=0):
+        self.print(i)
+        print("")
     def add(self,li:list):
         for a in range(li):
             self.cards.append(a)
@@ -580,7 +594,10 @@ class Player():
                     # self.printCards()
             else:
                 for i in range(len(act.appendix)):
-                    allActList = self.getAllOneAction(getNum(act.cards[0]))
+                    if len(act.appendix)==1:
+                        allActList = self.getAllOneAction(getNum(act.cards[0]))
+                    else:
+                        allActList = self.getAllOneAction()
                     actid = INFfun(i,act.appendix[0:i], allActList)
                     selAct = allActList[actid]
                     act.appendix[i] = selAct.cards[0]
@@ -590,19 +607,128 @@ class Player():
         self.last_move = act.clone()
         self.env.historyAct.append(act)
 
-    def printCards(self):
-        print("玩家{}:手牌".format(self.id),end=" ")
-        k=0
-        for a in self.cards:
-            Card(a).print(k)
-            k+=1
-        print("")
-        print("玩家{}已用".format(self.id), end=" ")
-        k = 0
-        for a in self.uncards:
-            Card(a).print(k)
-            k += 1
-        print("")
+    def printCards(self,haveId=True):
+        if haveId:
+            print("玩家{}:手牌".format(self.id),end=" ")
+            k=0
+            for a in self.cards:
+                print(cardToString(a,k),end="")
+                k+=1
+            print("")
+            print("玩家{}已用".format(self.id), end=" ")
+            k = 0
+            for a in self.uncards:
+                print(cardToString(a,k),end="")
+                k += 1
+            print("")
+        else:
+            print("玩家{}:手牌".format(self.id),end=" ")
+            for a in self.cards:
+                print(cardToString(a,-1),end="")
+            print("")
+            print("玩家{}已用".format(self.id), end=" ")
+            for a in self.uncards:
+                print(cardToString(a,-1),end="")
+            print("")
+
+    def getMinStep_noseq(self,li):  # 寻找一个人最小出完所有牌的步数,不算顺子和飞机
+        cnt=[0]*5
+        for a in li:
+            cnt[a]+=1
+
+        for tri in self.tri_seqList:
+            trilen=tri[1]-tri[0]
+            if trilen<=cnt[2]:
+                cnt[2]-=trilen
+            elif trilen<=cnt[1]:
+                cnt[1] -= trilen
+            elif trilen<=cnt[1]+cnt[2]*2:
+                trilen-=cnt[1]
+                cnt[2]-=math.ceil(trilen/2)
+                cnt[1]=trilen%2
+
+        ans=cnt[4]+cnt[3]
+        if cnt[1]>=cnt[4]*2:
+            cnt[1]-=cnt[4]*2
+        elif cnt[1]+cnt[2]*2>=cnt[4]*2:
+            cnt[1]%=2
+            cnt[4]-=cnt[1]//2
+            cnt[2]-=cnt[4]
+        else:
+            cnt[1] %= 2
+            cnt[2]=0
+        if cnt[1]+cnt[2] >= cnt[3]:
+            ans+=cnt[1]+cnt[2]-cnt[3]
+            if cnt[1]+cnt[2]-cnt[3]>=2 and li[13]==li[14]==1 and  cnt[1]>1:
+                ans-=1
+        return ans
+
+    def getMinStep_dfs_li(self,li,l,r,step,s=1):
+        minCnt=10
+        for j in range(l,r):
+            li[orderToNum[j] - 1] -= s
+            minCnt=min(minCnt,li[orderToNum[j] - 1])
+        if minCnt==0 or s==3:
+            self.getMinStep_dfs(step+1,li)
+        for j in range(l,r):
+            li[orderToNum[j] - 1] += s
+    def getMinStep_dfs(self,step, li):  # 寻找一个人最小出完所有牌的步数
+        c=self.getMinStep_noseq(li)+step
+        # print(li,step,c)
+        if self.__minStep>c:
+            self.__minStep=c
+
+        cnt = 0
+        for i in range(1, 13):  # 顺子
+            if li[orderToNum[i]-1] > 0:
+                cnt += 1
+                for k in range(5,cnt+1):
+                    self.getMinStep_dfs_li(li,i+1 - k, i+1,step)
+            else:
+                cnt = 0
+
+        cnt = 0
+        for i in range(1, 13):  # 2连对的顺子
+            if li[orderToNum[i]-1] > 1:
+                cnt += 1
+                for k in range(3,cnt+1):
+                    self.getMinStep_dfs_li(li,i+1 - k, i+1,step,2)
+            else:
+                cnt = 0
+        cnt = 0
+        for i in range(1, 13):  #3连对的顺子
+            if li[orderToNum[i]-1] > 1:
+                cnt += 1
+                for k in range(2,cnt+1):
+                    self.tri_seqList.append((i+1 - k, i+1))
+                    self.getMinStep_dfs_li(li,i+1 - k, i+1,step,3)
+                    self.tri_seqList.pop()
+            else:
+                cnt = 0
+
+
+    def getMinStep(self):  # 寻找一个人最小出完所有牌的步数:
+        cards = self.cards.copy()
+        li = [0] * 15
+        for a in cards:
+            li[getNum(a) - 1] += 1
+        self.__minStep=1000
+        self.tri_seqList=[]
+        self.getMinStep_dfs(0,li)
+        return self.__minStep
+    def getAvgOrder(self):  # 返回双非手牌的平均大小
+        cards = self.cards
+        li = [0] * 15
+        for a in cards:
+            li[getNum(a) - 1] += 1
+        avgOrder=0
+        cnt=0
+        for i in range(16):
+            if li[orderToNum[i]-1]>0:
+                avgOrder+=i
+                cnt+=1
+        return avgOrder/cnt
+
 class Doudizhu():
     def __init__(self):
         self.name="doudizhu"
@@ -625,7 +751,7 @@ class Doudizhu():
             rnd1, rnd2 = i, i * 2
             self.deck[rnd1], self.deck[rnd2] = self.deck[rnd2], self.deck[rnd1]
 
-    def shuffleDeck(self,T=10):
+    def shuffleDeck(self,T=5):
         up=len(self.deck)-1
         # self.CrossShuffle()
         # print(self.deck)
@@ -695,6 +821,7 @@ class Doudizhu():
         self.underCards=self.deck[-3:].copy()
         self.scList[self.dealer]*= 2
         self.beginScList= self.scList.copy()
+        self.beginHandCards=[self.players[i].cards.copy() for i in range(3)]
         return True
         # print("地主是玩家："+str(self.dealer),"地主牌是"+cardToString(self.lordCard))
 
@@ -730,6 +857,15 @@ class Doudizhu():
         if act.isBomb():  # 如果没选取动作就会报错
             for i in range(3):
                 self.scList[i] = min(self.scList[i]*2,self.beginScList[i]*16)
+    def settleScList(self,winPlayer):
+        ans=self.scList.copy()
+        if winPlayer != -1:
+            if self.dealer == winPlayer:
+                ans[(self.dealer + 1) % 3] = -self.scList[(self.dealer + 1) % 3]
+                ans[(self.dealer + 2) % 3] = -self.scList[(self.dealer + 2) % 3]
+            else:
+                ans[self.dealer] = -self.scList[self.dealer]
+        return ans
     def classActKind(self,allActList):
         # "pass", "bomb", "seq", "douseq", "triseq", "triseq_1", "triseq_2", "solo", "dou", "tri", "tri_1", "tri_2", "qua_2"
         actkindList=[[] for i in range(13)]
@@ -741,6 +877,7 @@ class Doudizhu():
     def printPlayerHand(self):
         for i in range(3):
             self.players[i].printCards()
+
 
 def __dfsPrintActList(newLi, li0,printFun=None):#printFun是打印这张牌的条件
     if isinstance(li0,np.ndarray):

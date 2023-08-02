@@ -1,4 +1,5 @@
-INFEA=603+54
+INFEA=603+54+3
 mainfea=512
 lstmfea=128
 lstmInfea=57*3
+actionSpaceType={-4:1,-3:1 ,-2:1 ,3:1,11:1}

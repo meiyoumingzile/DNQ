@@ -4,10 +4,7 @@ import torch.multiprocessing as mp
 from tractor_network_res import AgentNet, AgentCriNet
 from tractor_dppo_agent import DppoWorkers
 import tractor_utils as utils
-import tractor_game
-from tractor_game import CC
 from tractor_dppo_chief import chief_worker
-import os
 
 # start the main function...
 parser = argparse.ArgumentParser()

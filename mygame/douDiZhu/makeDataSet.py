@@ -5,7 +5,7 @@ from doudizhu_game import Player,getNum,Card,getDecor,Action,Doudizhu
 
 parser = argparse.ArgumentParser(description='random data generator')
 parser.add_argument('--output', default='eval_data', type=str)
-parser.add_argument('--num_games', default=10000, type=int)
+parser.add_argument('--num_games', default=100000, type=int)
 args = parser.parse_args()
 
 env=Doudizhu()

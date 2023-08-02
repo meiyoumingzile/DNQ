@@ -1,11 +1,11 @@
 import os
 import numpy as np
 import onnxruntime as ort
-from perfectdou.env.encode import (
-    encode_obs_landlord,
-    encode_obs_peasant,
-    _decode_action,
-)
+# from perfectdou.env.encode import (
+#     encode_obs_landlord,
+#     encode_obs_peasant,
+#     _decode_action,
+# )
 from perfectdou.env.game import bombs
 
 

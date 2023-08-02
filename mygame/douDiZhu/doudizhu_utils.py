@@ -218,21 +218,37 @@ def drawMacd(xList,yList,k,color):
     if len(yList)>=k:
         ma5=getMacdList(yList,k)
         plt.plot(xList[k:], ma5,color=color,label="ma"+str(k))
-def drawBrokenLine(xList,yList,pointList,name="aaa",xLabel="",yLabel="",isClear=True):
+def drawBrokenLine(data,name="aaa",xLabel="",yLabel="",isClear=True):
+    xList, yList0, pointList=data[0],data[1],data[2]
     plt.figure(figsize=(20, 10), dpi=100)
 # game = ['1-G1', '1-G2', '1-G3', '1-G4', '1-G5', '2-G1', '2-G2', '2-G3', '2-G4', '2-G5', '3-G1', '3-G2', '3-G3',
 #         '3-G4', '3-G5', '452G1', '4554-G2', '54G3', '54-G4', '54G5', '54-G6']
 # scores = [23, 10, 38, 30, 36, 20, 28, 36, 16, 29, 15, 26, 30, 26, 38, 34, 33, 25, 28, 40, 28]
-    plt.plot(xList, yList,color='blue',label="score")
-    drawMacd(xList,yList,5,"yellow")
-    drawMacd(xList, yList, 30, "red")
+    yList = [x[0] for x in yList0]
+    yList_type = [x[1] for x in yList0]
+    # drawMacd(xList,yList,5,"yellow")
+    nowtype,prei=yList_type[0],0
+    n=len(yList_type)
+    for i in range(n):
+        if nowtype!=yList_type[i]:
+            if nowtype==0:
+                plt.plot(xList[prei:i], yList[prei:i], color="blue", label="train landlord")
+            else:
+                plt.plot(xList[prei:i], yList[prei:i], color="red", label="train farmer")
+            nowtype,prei=yList_type[i],i-1
+    if nowtype == 0:
+        plt.plot(xList[prei:n], yList[prei:n], color="blue", label="train landlord")
+    else:
+        plt.plot(xList[prei:n], yList[prei:n], color="red", label="train farmer")
+    drawMacd(xList, yList, 30, "yellow")
     plt.legend(loc="upper left", bbox_to_anchor=(0.05, 0.95),
                ncol=3, shadow=True,fancybox=True)
     plt.xlabel(xLabel)
     plt.ylabel(yLabel)
     if pointList !=None:
-        for a in pointList:
-            plt.scatter(a[0], a[1],s=np.pi * (7)**2, c="red")
+        array1 = [x[0] for x in pointList]
+        array2 = [x[1] for x in pointList]
+        plt.plot(array1, array2, color='black', label="test score")
     plt.savefig("res/"+name+".jpg")
     if isClear:
         plt.clf()

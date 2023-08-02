@@ -3,8 +3,8 @@ from collections import deque
 
 import torch
 
-from baseline.douzero_encoder import Infoset, getModel, toDouzeroObs, _cards2array_1
-from baseline.env.env import Env
+# from baseline.douzero_encoder import Infoset, getModel, toDouzeroObs, _cards2array_1
+# from baseline.env.env import Env
 from DNQ.mygame.douDiZhu.doudizhu_encoder import getBaseFea, getAllActionFea
 from doudizhu_game import Doudizhu, dfsPrintActList, Action, baselinePolicy, baselinePolicy_first, INF, \
     printDeckListForId
@@ -60,8 +60,9 @@ for _ in range(0):
         # env.printPlayerHand()
         que=deque(maxlen=2)
         allFirstAct = env.players[maxPlayerId].getAllFirstAction(all=True)
-        maxact_id,maxact=policy(env,maxPlayerId,-1,allFirstAct,INFfun)#env:Doudizhu,nowPlayerid,maxPlayerid,allAct:list,INFfun
-
+        env.players[maxPlayerId].printCards(False)
+        print(env.players[maxPlayerId].getMinStep())
+        maxact_id,maxact=baselinePolicy_first(env,maxPlayerId,-1,allFirstAct,INFfun)#env:Doudizhu,nowPlayerid,maxPlayerid,allAct:list,INFfun
         pid=maxPlayerId
         # print(maxact.playerId, maxPlayerId)
         # fea=getBaseFea(env,maxPlayerId,maxact)
@@ -78,7 +79,7 @@ for _ in range(0):
             #     dfsPrintActList(ans)
             pid = (pid + 1) % 3
             allAct=env.players[pid].getAllAction(maxact,all=True)
-            act_id, act = policy(env,pid,maxPlayerId,allAct,INFfun)
+            act_id, act = baselinePolicy(env,pid,maxPlayerId,allAct,INFfun)
             hisli.append(act)
             maxPlayerId,maxact, winPlayer=env.step(maxact,act,maxPlayerId,pid)
             que.append(act)
@@ -86,7 +87,7 @@ for _ in range(0):
             if winPlayer!=-1 or len(que)==2 and que[0].isPass() and que[-1].isPass():
                 break
         # dfsPrintActList(hisli)
-    print(winPlayer)
+    # print(winPlayer)
 # act=Action([4,4,4,5,5,5],[INF,INF,INF,INF],playerId=0)
 # env.reset()
 # deck,dealer=mkDeck(cheat1)
@@ -99,10 +100,11 @@ for _ in range(0):
 #     dfsPrintActList(allAct)
 
 pid=0
-setHandCards(env.players[pid],["10","10","10","J","J","J","A","A"])
-env.players[pid].getHandList()
+# setHandCards(env.players[pid],["6","6","6","7","7","7","8","8","8","9","9","9","10","10","J","J","J","A","A"])
+setHandCards(env.players[pid],["9","9","9","9","10","10","10","10"])
+# env.players[pid].getHandList()
 # print(env.players[pid].getDouCnt(False))
-act=Action([6,6,6,7,7,7],[2,2,4,4])
+act=Action([6,6,6,7,7,7],[2,3])
 ans = env.players[pid].getAllAction(act)
 # ans=env.players[pid].getAllFirstAction()
 
@@ -111,6 +113,10 @@ ans = env.players[pid].getAllAction(act)
 #     if a.kind=="triseq_1":
 #         li.append(a)
 dfsPrintActList(ans)
+ans=env.players[pid].getAllDouAction()
+dfsPrintActList(ans)
+print(env.players[pid].getMinStep())
+
 # dfsPrintActList(allAct)
 # arr=_cards2array_1([1,2,3,4,5,1,2,3,4,13])
 # print(arr)

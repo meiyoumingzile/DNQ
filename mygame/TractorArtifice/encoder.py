@@ -1,6 +1,5 @@
 import torch
-import tractor_game
-from tractor_game import Player,fenInd,getNum,Card,getDecor,Action,CC
+from DNQ.mygame.TractorArtifice.game_env.tractor_game import Player,fenInd, Action,CC
 codeWide=55
 fen=[fenInd[i%13]/10 for i in range(0,55)]
 # print(fen)

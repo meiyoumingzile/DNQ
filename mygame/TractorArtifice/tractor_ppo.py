@@ -1,25 +1,20 @@
 import argparse
-import datetime
 import os
 import random
 import time
 
 import numpy as np
 import torch
-from torch import nn
 
-import tractor_game
+from DNQ.mygame.TractorArtifice.game_env import tractor_game
 from tractor_utils import getNowTimePath, drawBrokenLine
-from baselinePolicy import baselineColdeck
-from tractor_game import CC,Action,Player,dfsPrintActList
+from DNQ.mygame.TractorArtifice.game_env.baselinePolicy import baselineColdeck
+from DNQ.mygame.TractorArtifice.game_env.tractor_game import Action,Player,dfsPrintActList
 from encoder import handTo01code, getActionFeature, getBaseFea, actTo01code, cardsTo01code, addActionFeature
 from tractor_network_res import AgentNet, AgentCriNet
-import pyro
-import pyro.distributions as dist
-
 
 # start to define the workers...
-from tractor_game import CC
+from DNQ.mygame.TractorArtifice.game_env.tractor_game import CC
 INFEA=302
 
 class Dppoagent:
